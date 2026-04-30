@@ -1,10 +1,13 @@
 export type Role = 'admin' | 'teacher' | 'student';
 
+export type QuestionType = 'single' | 'multiple' | 'text';
+
 export interface Question {
   id: string;
+  type: QuestionType;
   text: string;
   options: string[];
-  correctAnswer: number;
+  correctAnswer: number | number[] | string;
 }
 
 export interface GradeScale {
@@ -21,6 +24,9 @@ export interface Quiz {
   timeLimitPerQuestion: number;
   gradeScale: GradeScale;
   isLocked: boolean;
+  scoreReveal: 'immediate' | 'manual';
+  startTime?: number | null;
+  endTime?: number | null;
   createdAt: number;
 }
 
@@ -34,17 +40,20 @@ export interface QuizResult {
   quizId: string;
   studentId: string;
   studentName: string;
+  teacherId: string;
   score: number;
   grade: string;
   totalQuestions: number;
   violations: Violation[];
+  answers: (number | number[] | string)[];
   timeTaken: number;
   completedAt: number;
 }
 
 export interface User {
-  id: string;
+  uid: string;
   name: string;
   email: string;
   role: Role;
+  teacherIds?: string[]; // For students, identifying their assigned teachers
 }

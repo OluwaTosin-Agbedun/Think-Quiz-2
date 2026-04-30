@@ -1,0 +1,71 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User account information and roles",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "teacher", "student"] },
+        "teacherIds": { "type": "array", "items": { "type": "string" }, "description": "For students, defines which teachers they are assigned to" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email", "role"]
+    },
+    "Quiz": {
+      "title": "Quiz",
+      "description": "Quiz definition created by teachers or admins",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "questions": { "type": "array" },
+        "timeLimitPerQuestion": { "type": "number" },
+        "gradeScale": { "type": "object" },
+        "isLocked": { "type": "boolean" },
+        "startTime": { "type": "string", "format": "date-time" },
+        "endTime": { "type": "string", "format": "date-time" },
+        "scoreReveal": { "type": "string", "enum": ["immediate", "manual"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "teacherId", "title", "questions"]
+    },
+    "Result": {
+      "title": "Quiz Result",
+      "description": "A student's attempt at a quiz",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "quizId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "score": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "grade": { "type": "string" },
+        "violations": { "type": "array" },
+        "timeTaken": { "type": "number" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "quizId", "studentId", "score"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and roles"
+    },
+    "/quizzes/{quizId}": {
+      "schema": "Quiz",
+      "description": "Quizzes"
+    },
+    "/results/{resultId}": {
+      "schema": "Result",
+      "description": "Quiz results"
+    }
+  }
+}

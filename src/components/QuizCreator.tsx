@@ -1,26 +1,33 @@
-import React, { useState } from 'react';
-import { X, Plus, Trash2, Save, ArrowLeft, FileText, Upload, Brain, Settings } from 'lucide-react';
-import { Quiz, Question, GradeScale } from '../types';
-import { generateId } from '../lib/utils';
+import React, { useState, useEffect } from 'react';
+import { X, Plus, Trash2, Save, ArrowLeft, FileText, Upload, Brain, Settings, Calendar, Eye, EyeOff, Clock } from 'lucide-react';
+import { Quiz, Question, GradeScale, User } from '../types';
+import { generateId, cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 
 interface QuizCreatorProps {
-  onSave: (quiz: Quiz) => void;
+  user: User;
+  onSave: () => void;
   onCancel: () => void;
+  editingQuiz?: Quiz | null;
 }
 
-export default function QuizCreator({ onSave, onCancel }: QuizCreatorProps) {
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [timeLimit, setTimeLimit] = useState(30);
+export default function QuizCreator({ user, onSave, onCancel, editingQuiz }: QuizCreatorProps) {
+  const [title, setTitle] = useState(editingQuiz?.title || '');
+  const [description, setDescription] = useState(editingQuiz?.description || '');
+  const [timeLimit, setTimeLimit] = useState(editingQuiz?.timeLimitPerQuestion || 30);
   const [isParsing, setIsParsing] = useState(false);
-  const [gradeScale, setGradeScale] = useState<GradeScale>({ pass: 50, excellent: 80 });
-  const [questions, setQuestions] = useState<Question[]>([
-    { id: generateId(), text: '', options: ['', '', '', ''], correctAnswer: 0 }
+  const [gradeScale, setGradeScale] = useState<GradeScale>(editingQuiz?.gradeScale || { pass: 50, excellent: 80 });
+  const [scoreReveal, setScoreReveal] = useState<'immediate' | 'manual'>(editingQuiz?.scoreReveal || 'immediate');
+  const [startTime, setStartTime] = useState<string>(editingQuiz?.startTime ? new Date(editingQuiz.startTime).toISOString().slice(0, 16) : '');
+  const [endTime, setEndTime] = useState<string>(editingQuiz?.endTime ? new Date(editingQuiz.endTime).toISOString().slice(0, 16) : '');
+  const [questions, setQuestions] = useState<Question[]>(editingQuiz?.questions || [
+    { id: generateId(), type: 'single', text: '', options: ['', '', '', ''], correctAnswer: 0 }
   ]);
 
   const addQuestion = () => {
-    setQuestions([...questions, { id: generateId(), text: '', options: ['', '', '', ''], correctAnswer: 0 }]);
+    setQuestions([...questions, { id: generateId(), type: 'single', text: '', options: ['', '', '', ''], correctAnswer: 0 }]);
   };
 
   const removeQuestion = (index: number) => {
@@ -35,213 +42,341 @@ export default function QuizCreator({ onSave, onCancel }: QuizCreatorProps) {
 
   const simulatePDFParsing = () => {
     setIsParsing(true);
-    // Simulate AI extraction logic
     setTimeout(() => {
       const mockAISuggestions: Question[] = [
-        { id: generateId(), text: 'What is the capital of Academic Integrity?', options: ['Honesty', 'Deception', 'Gaming', 'Ethics'], correctAnswer: 0 },
-        { id: generateId(), text: 'Which tool prevents tab switching?', options: ['AI Studio', 'EduQuiz API', 'GPS', 'Thermal'], correctAnswer: 1 },
-        { id: generateId(), text: 'What time limit is recommended for ethics?', options: ['5s', '10s', '30s', '60s'], correctAnswer: 2 }
+        { id: generateId(), type: 'single', text: 'What is the primary objective of academic integrity protocols?', options: ['Punishment', 'Verification', 'Mentorship', 'Automation'], correctAnswer: 1 },
+        { id: generateId(), type: 'multiple', text: 'Which of the following are tracked during a session?', options: ['Tab Switching', 'Mouse Clicks', 'Window Focus', 'Webcam Feed'], correctAnswer: [0, 2] },
+        { id: generateId(), type: 'text', text: 'Define "Denial of Wallet" in your own words.', options: [], correctAnswer: 'cost-attack' }
       ];
-      setQuestions(prev => [...prev, ...mockAISuggestions].filter(q => q.text !== ''));
+      setQuestions(prev => [...prev.filter(q => q.text !== ''), ...mockAISuggestions]);
       setIsParsing(false);
     }, 2000);
   };
 
-  const handleSave = () => {
-    if (!title || questions.some(q => !q.text || q.options.some(o => !o))) {
-      alert('Please fill in all fields.');
+  const handleSave = async () => {
+    if (!title || questions.some(q => {
+      if (!q.text) return true;
+      if (q.type !== 'text' && q.options.some(o => !o)) return true;
+      if (q.type === 'single' && typeof q.correctAnswer !== 'number') return true;
+      if (q.type === 'multiple' && (!Array.isArray(q.correctAnswer) || q.correctAnswer.length === 0)) return true;
+      if (q.type === 'text' && !q.correctAnswer) return true;
+      return false;
+    })) {
+      alert('Incomplete Data: Please ensure all questions and fields are populated.');
       return;
     }
 
-    const quiz: Quiz = {
-      id: generateId(),
-      teacherId: 'u1',
+    const quizId = editingQuiz?.id || generateId();
+    const quizData: Quiz = {
+      id: quizId,
+      teacherId: user.uid,
       title,
       description,
       questions,
       timeLimitPerQuestion: timeLimit,
       gradeScale,
-      isLocked: false,
-      createdAt: Date.now()
+      scoreReveal,
+      startTime: startTime ? new Date(startTime).getTime() : undefined,
+      endTime: endTime ? new Date(endTime).getTime() : undefined,
+      isLocked: editingQuiz?.isLocked ?? false,
+      createdAt: editingQuiz?.createdAt || Date.now()
     };
-    onSave(quiz);
+
+    try {
+      await setDoc(doc(db, 'quizzes', quizId), quizData);
+      onSave();
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `quizzes/${quizId}`);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 py-12 px-6 font-sans">
-      <div className="max-w-4xl mx-auto">
-        <header className="flex justify-between items-center mb-10">
-          <div className="flex items-center gap-4">
-             <button onClick={onCancel} className="p-3 bg-white border border-slate-200 rounded-xl text-slate-500 hover:bg-slate-50 transition-all shadow-sm">
-                <ArrowLeft className="w-5 h-5" />
+    <div className="min-h-screen bg-slate-50 py-16 px-10 font-sans">
+      <div className="max-w-6xl mx-auto">
+        <header className="flex justify-between items-center mb-16">
+          <div className="flex items-center gap-6">
+             <button onClick={onCancel} className="p-4 bg-white border border-slate-200 rounded-[1.5rem] text-slate-500 hover:bg-slate-50 transition-all shadow-sm group">
+                <ArrowLeft className="w-6 h-6 group-hover:-translate-x-1 transition-transform" />
              </button>
              <div>
-                <h1 className="text-3xl font-black text-slate-900 tracking-tight">Assessment Architect</h1>
-                <p className="text-slate-500 font-medium">Drafting integrity-first evaluations</p>
+                <h1 className="text-4xl font-black text-slate-900 tracking-tighter leading-none mb-2">Curriculum Architect</h1>
+                <p className="text-slate-400 font-bold text-lg italic">{editingQuiz ? 'Refining existing assessment structure' : 'Drafting new academic integrity evaluation'}</p>
              </div>
           </div>
           <button
             onClick={handleSave}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl font-black shadow-xl shadow-blue-500/20 transition-all flex items-center gap-2"
+            className="bg-blue-600 hover:bg-blue-700 text-white px-10 py-5 rounded-2xl font-black shadow-2xl shadow-blue-500/20 transition-all flex items-center gap-3 text-lg leading-none"
           >
-            <Save className="w-5 h-5" /> Finalize & Deploy
+            <Save className="w-5 h-5" /> {editingQuiz ? 'Update' : 'Deploy'} Assessment
           </button>
         </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2 space-y-6">
-            {/* PDF Upload Feature */}
-            <section className="bg-slate-900 p-8 rounded-[2rem] text-white shadow-2xl relative overflow-hidden">
-               <div className="relative z-10">
-                  <div className="flex items-center gap-3 mb-4">
-                     <Brain className="text-blue-400 w-6 h-6" />
-                     <h2 className="text-xl font-bold">AI Quiz Assistant</h2>
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
+          <div className="lg:col-span-8 space-y-10">
+            {/* AI Assistant Section */}
+            <section className="bg-indigo-600 p-12 rounded-[3.5rem] text-white shadow-2xl shadow-indigo-100 relative overflow-hidden group">
+               <div className="relative z-10 flex items-start gap-8">
+                  <div className="w-20 h-20 bg-white/10 rounded-[2.5rem] flex items-center justify-center shrink-0 border border-white/20">
+                     <Brain className="text-white w-10 h-10" />
                   </div>
-                  <p className="text-slate-400 mb-6 leading-relaxed">
-                    Upload a syllabus or study material in PDF format. We'll use machine learning to extract 10 high-quality questions automatically.
-                  </p>
-                  
-                  <div className="flex gap-4">
+                  <div className="flex-1">
+                     <h2 className="text-2xl font-black mb-3 tracking-tight">AI Content Synthesis</h2>
+                     <p className="text-indigo-100 mb-8 leading-relaxed text-lg max-w-xl">
+                       Supply a source document for integrity protocols. Our neural model will extrapolate questions aligned with institutional standards.
+                     </p>
+                     
                      <button 
                       onClick={simulatePDFParsing}
                       disabled={isParsing}
-                      className="flex-1 bg-white/10 hover:bg-white/20 border border-white/20 px-6 py-4 rounded-2xl transition-all flex items-center justify-center gap-3 font-bold disabled:opacity-50"
+                      className="bg-white text-indigo-600 px-8 py-4 rounded-2xl transition-all flex items-center gap-4 font-black uppercase text-xs tracking-widest disabled:opacity-50 shadow-lg"
                      >
                        {isParsing ? (
-                         <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
+                         <span className="animate-spin w-5 h-5 border-4 border-indigo-400 border-t-transparent rounded-full" />
                        ) : (
-                         <Upload className="w-5 h-5 text-blue-400" />
+                         <Upload className="w-5 h-5" />
                        )}
-                       {isParsing ? 'Parsing Document...' : 'Upload PDF & Generate'}
+                       {isParsing ? 'Processing Knowledge Graph...' : 'Synthesize from PDF'}
                      </button>
                   </div>
                </div>
-               <div className="absolute right-[-20px] bottom-[-20px] opacity-10">
-                  <FileText className="w-32 h-32" />
+               <div className="absolute right-[-5%] top-[-10%] opacity-5 group-hover:opacity-10 transition-opacity">
+                  <FileText className="w-80 h-80 rotate-12" />
                </div>
             </section>
 
-            {/* Questions List */}
-            <div className="space-y-6">
-              <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                <Settings className="w-5 h-5 text-slate-400" /> Assessment Items
+            {/* Questions Registry */}
+            <div className="space-y-8">
+              <h2 className="text-2xl font-black text-slate-800 flex items-center gap-4 tracking-tight px-4">
+                <Settings className="w-7 h-7 text-slate-400 animate-spin-slow" /> Question Inventory
               </h2>
-              {questions.map((q, qIndex) => (
-                <motion.div 
-                  layout
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  key={q.id} 
-                  className="bg-white p-8 rounded-[2rem] border border-slate-200 shadow-sm relative group hover:border-blue-200 transition-colors"
-                >
-                  <div className="absolute -left-3 top-8 bg-slate-900 text-white w-10 h-10 rounded-2xl flex items-center justify-center font-black text-lg shadow-lg">
-                    {qIndex + 1}
-                  </div>
-                  <button 
-                    onClick={() => removeQuestion(qIndex)}
-                    className="absolute right-6 top-6 text-slate-300 hover:text-red-500 transition-colors"
+              <AnimatePresence>
+                {questions.map((q, qIndex) => (
+                  <motion.div 
+                    layout
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    key={q.id} 
+                    className="bg-white p-12 rounded-[3.5rem] border border-slate-200 shadow-xl relative group hover:border-blue-400/50 transition-all"
                   >
-                    <Trash2 className="w-5 h-5" />
-                  </button>
-                  
-                  <div className="space-y-6 pt-4">
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Question Text</label>
-                      <input 
-                        type="text" 
-                        value={q.text} 
-                        onChange={e => updateQuestion(qIndex, { text: e.target.value })}
-                        placeholder="Type your question here..."
-                        className="w-full bg-slate-50 px-6 py-4 rounded-2xl border border-slate-100 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-900 transition-all"
-                      />
+                    <div className="absolute -left-5 top-12 bg-indigo-600 text-white w-12 h-12 rounded-[1.5rem] flex items-center justify-center font-black text-xl shadow-2xl z-10 border border-white/20">
+                      {qIndex + 1}
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {q.options.map((option, oIndex) => (
-                        <div key={oIndex} className="relative group/opt">
-                          <input 
-                            type="text" 
-                            value={option}
-                            onChange={e => {
-                              const newOptions = [...q.options];
-                              newOptions[oIndex] = e.target.value;
-                              updateQuestion(qIndex, { options: newOptions });
+                    <button 
+                      onClick={() => removeQuestion(qIndex)}
+                      className="absolute right-10 top-10 p-3 bg-slate-50 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all"
+                    >
+                      <Trash2 className="w-6 h-6" />
+                    </button>
+                    
+                    <div className="space-y-10">
+                      <div className="flex flex-wrap gap-4 px-2">
+                        {(['single', 'multiple', 'text'] as const).map(type => (
+                          <button
+                            key={type}
+                            onClick={() => {
+                              const newCorrect = type === 'single' ? 0 : type === 'multiple' ? [] : '';
+                              const newOptions = type === 'text' ? [] : (questions[qIndex].options.length > 0 ? questions[qIndex].options : ['', '', '', '']);
+                              updateQuestion(qIndex, { type, correctAnswer: newCorrect, options: newOptions });
                             }}
-                            placeholder={`Option ${String.fromCharCode(65+oIndex)}`}
                             className={cn(
-                              "w-full px-6 py-4 rounded-xl border-2 transition-all outline-none font-semibold pl-14",
-                              q.correctAnswer === oIndex ? "bg-emerald-50 border-emerald-500 text-emerald-900" : "bg-white border-slate-100 focus:border-blue-400"
-                            )}
-                          />
-                          <button 
-                            onClick={() => updateQuestion(qIndex, { correctAnswer: oIndex })}
-                            className={cn(
-                              "absolute left-4 top-1/2 -translate-y-1/2 w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs transition-all",
-                              q.correctAnswer === oIndex ? "bg-emerald-500 text-white" : "bg-slate-100 text-slate-400 hover:bg-emerald-100"
+                              "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all",
+                              q.type === type ? "bg-slate-900 text-white border-slate-900 shadow-md" : "bg-slate-50 text-slate-400 border-slate-100 hover:bg-white"
                             )}
                           >
-                            {String.fromCharCode(65 + oIndex)}
+                            {type.replace('-', ' ')}
                           </button>
+                        ))}
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-4 px-2">Prompt Formulation</label>
+                        <textarea 
+                          rows={2}
+                          value={q.text} 
+                          onChange={e => updateQuestion(qIndex, { text: e.target.value })}
+                          placeholder="Formulate your challenge prompt..."
+                          className="w-full bg-slate-50 px-8 py-6 rounded-3xl border border-slate-100 focus:bg-white focus:ring-4 focus:ring-blue-500/10 outline-none font-black text-slate-900 transition-all text-xl placeholder:opacity-30 placeholder:italic resize-none ring-offset-2"
+                        />
+                      </div>
+
+                      {q.type === 'text' ? (
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-4 px-2">Expected Lexeme (Key Phrase)</label>
+                          <input 
+                            type="text"
+                            value={q.correctAnswer as string}
+                            onChange={e => updateQuestion(qIndex, { correctAnswer: e.target.value })}
+                            placeholder="Enter the expected keyword or phrase..."
+                            className="w-full bg-slate-50 px-8 py-5 rounded-2xl border border-slate-100 focus:bg-white focus:ring-4 focus:ring-blue-500/10 outline-none font-bold text-slate-900 transition-all text-lg"
+                          />
                         </div>
-                      ))}
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-2">
+                          {q.options.map((option, oIndex) => (
+                            <div key={oIndex} className="relative group/opt">
+                              <input 
+                                type="text" 
+                                value={option}
+                                onChange={e => {
+                                  const newOptions = [...q.options];
+                                  newOptions[oIndex] = e.target.value;
+                                  updateQuestion(qIndex, { options: newOptions });
+                                }}
+                                placeholder={`Option Variant ${String.fromCharCode(65+oIndex)}`}
+                                className={cn(
+                                  "w-full px-8 py-5 rounded-2xl border-2 transition-all outline-none font-bold pl-16 text-lg",
+                                  (q.type === 'single' ? q.correctAnswer === oIndex : (q.correctAnswer as number[]).includes(oIndex))
+                                    ? "bg-emerald-50 border-emerald-500 text-emerald-900 shadow-lg shadow-emerald-900/10" 
+                                    : "bg-white border-slate-100 focus:border-blue-400 placeholder:opacity-40"
+                                )}
+                              />
+                              <button 
+                                onClick={() => {
+                                  if (q.type === 'single') {
+                                    updateQuestion(qIndex, { correctAnswer: oIndex });
+                                  } else {
+                                    const current = q.correctAnswer as number[];
+                                    const updated = current.includes(oIndex) 
+                                      ? current.filter(i => i !== oIndex) 
+                                      : [...current, oIndex].sort();
+                                    updateQuestion(qIndex, { correctAnswer: updated });
+                                  }
+                                }}
+                                className={cn(
+                                  "absolute left-5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-xl flex items-center justify-center font-black text-xs transition-all border shadow-sm",
+                                  (q.type === 'single' ? q.correctAnswer === oIndex : (q.correctAnswer as number[]).includes(oIndex))
+                                    ? "bg-emerald-500 text-white border-emerald-400 scale-110" 
+                                    : "bg-slate-50 text-slate-400 hover:bg-emerald-100 border-slate-100"
+                                )}
+                              >
+                                {String.fromCharCode(65 + oIndex)}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                </motion.div>
-              ))}
+                  </motion.div>
+                ))}
+              </AnimatePresence>
               <button
                 onClick={addQuestion}
-                className="w-full py-6 border-4 border-dashed border-slate-200 rounded-[2rem] text-slate-300 hover:border-blue-200 hover:text-blue-500 transition-all flex items-center justify-center gap-3 font-black text-lg uppercase tracking-widest"
+                className="w-full py-10 border-4 border-dashed border-slate-200 rounded-[3.5rem] text-slate-300 hover:border-blue-500 hover:text-blue-600 transition-all flex items-center justify-center gap-4 font-black text-xl uppercase tracking-[0.2em] group"
               >
-                <Plus className="w-6 h-6" /> Add New Item
+                <Plus className="w-8 h-8 group-hover:rotate-90 transition-transform duration-500" /> New Assessment Item
               </button>
             </div>
           </div>
 
-          {/* Configuration Panel */}
-          <aside className="space-y-6">
-            <div className="bg-white p-8 rounded-[2rem] border border-slate-200 shadow-sm sticky top-10">
-               <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest mb-6 pb-2 border-b border-slate-100">Config</h3>
+          {/* Infrastructure Controls Area */}
+          <aside className="lg:col-span-4 space-y-8">
+            <div className="bg-white p-10 rounded-[3.5rem] border border-slate-200 shadow-xl sticky top-12">
+               <h3 className="text-xs font-black text-slate-900 uppercase tracking-[0.3em] mb-10 pb-4 border-b border-slate-100 flex items-center gap-2">
+                 <Settings className="w-4 h-4" /> Global Configuration
+               </h3>
                
-               <div className="space-y-8">
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Assessment Title</label>
+               <div className="space-y-10">
+                  <div className="space-y-3">
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest px-2">Assessment Label</label>
                     <input 
                       type="text" 
                       value={title} 
                       onChange={e => setTitle(e.target.value)}
-                      className="w-full bg-slate-50 px-4 py-3 rounded-xl border border-slate-100 font-bold focus:bg-white transition-all outline-none"
+                      placeholder="e.g. Advanced Ethics Vol. 1"
+                      className="w-full bg-slate-50 px-6 py-4 rounded-2xl border border-slate-100 font-black focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-lg"
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Time Limit (Sec/Item)</label>
-                    <div className="flex items-center gap-4">
+                  <div className="space-y-4">
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest px-2">Temporal Limit</label>
+                    <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                       <div className="flex justify-between items-end mb-4">
+                          <span className="text-3xl font-black text-slate-900 leading-none">{timeLimit}<span className="text-sm text-slate-400 font-bold ml-1">SEC</span></span>
+                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Per Challenge</span>
+                       </div>
                        <input 
-                        type="range" min="5" max="120" step="5"
+                        type="range" min="5" max="180" step="5"
                         value={timeLimit} 
                         onChange={e => setTimeLimit(Number(e.target.value))}
-                        className="flex-1 accent-blue-600"
+                        className="w-full h-1.5 bg-slate-200 rounded-full appearance-none cursor-pointer accent-blue-600 focus:outline-none"
                        />
-                       <span className="font-mono font-black text-lg">{timeLimit}s</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 pt-6 border-t border-slate-100">
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest px-2">Assessment Availability</label>
+                    <div className="space-y-4">
+                       <div className="relative">
+                          <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                          <input 
+                            type="datetime-local"
+                            value={startTime}
+                            onChange={e => setStartTime(e.target.value)}
+                            className="w-full bg-slate-50 pl-12 pr-6 py-4 rounded-2xl border border-slate-100 font-bold text-sm outline-none focus:bg-white"
+                          />
+                          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-2 px-2">Start Protocol</p>
+                       </div>
+                       <div className="relative">
+                          <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                          <input 
+                            type="datetime-local"
+                            value={endTime}
+                            onChange={e => setEndTime(e.target.value)}
+                            className="w-full bg-slate-50 pl-12 pr-6 py-4 rounded-2xl border border-slate-100 font-bold text-sm outline-none focus:bg-white"
+                          />
+                          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-2 px-2">End Protocol</p>
+                       </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 pt-6 border-t border-slate-100">
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest px-2">Score Revelation</label>
+                    <div className="grid grid-cols-2 gap-4">
+                       <button 
+                        onClick={() => setScoreReveal('immediate')}
+                        className={cn(
+                          "px-6 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all border flex flex-col items-center gap-2",
+                          scoreReveal === 'immediate' ? "bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-500/20" : "bg-slate-50 text-slate-400 border-slate-100 hover:bg-white"
+                        )}
+                       >
+                          <Eye className="w-5 h-5" /> Immediate
+                       </button>
+                       <button 
+                        onClick={() => setScoreReveal('manual')}
+                        className={cn(
+                          "px-6 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all border flex flex-col items-center gap-2",
+                          scoreReveal === 'manual' ? "bg-indigo-600 text-white border-indigo-500 shadow-lg shadow-indigo-100" : "bg-slate-50 text-slate-400 border-slate-100 hover:bg-white"
+                        )}
+                       >
+                          <EyeOff className="w-5 h-5" /> Post-Audit
+                       </button>
                     </div>
                   </div>
 
                   <div className="pt-6 border-t border-slate-100">
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Grading Boundaries (%)</label>
-                    <div className="space-y-4">
-                       <div className="flex justify-between items-center bg-blue-50 p-3 rounded-xl">
-                          <span className="text-xs font-bold text-blue-700">Excellent</span>
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-6 px-2">Grading Infrastructure (%)</label>
+                    <div className="grid grid-cols-1 gap-4">
+                       <div className="flex justify-between items-center bg-emerald-50 p-6 rounded-[1.5rem] border border-emerald-100/50">
+                          <div>
+                            <p className="text-[9px] font-black text-emerald-600 uppercase tracking-[0.2em] mb-1">Excellent Tier</p>
+                            <span className="text-xs font-bold text-emerald-800 italic">Advanced Proficiency</span>
+                          </div>
                           <input 
                             type="number" value={gradeScale.excellent}
                             onChange={e => setGradeScale({...gradeScale, excellent: Number(e.target.value)})}
-                            className="w-12 bg-transparent text-right font-black outline-none"
+                            className="w-16 bg-white px-3 py-2 rounded-xl text-right font-black outline-none border border-emerald-200"
                           />
                        </div>
-                       <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl">
-                          <span className="text-xs font-bold text-slate-500">Pass</span>
+                       <div className="flex justify-between items-center bg-blue-50 p-6 rounded-[1.5rem] border border-blue-100/50">
+                          <div>
+                            <p className="text-[9px] font-black text-blue-600 uppercase tracking-[0.2em] mb-1">Compliance Tier</p>
+                            <span className="text-xs font-bold text-blue-800 italic">Basic Passing Logic</span>
+                          </div>
                           <input 
                             type="number" value={gradeScale.pass}
                             onChange={e => setGradeScale({...gradeScale, pass: Number(e.target.value)})}
-                            className="w-12 bg-transparent text-right font-black outline-none"
+                            className="w-16 bg-white px-3 py-2 rounded-xl text-right font-black outline-none border border-blue-200"
                           />
                        </div>
                     </div>

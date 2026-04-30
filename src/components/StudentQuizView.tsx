@@ -1,26 +1,30 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Quiz, Question, QuizResult, Violation } from '../types';
+import { Quiz, Question, QuizResult, Violation, User } from '../types';
 import { useCheatingMonitor } from '../hooks/useCheatingMonitor';
-import { cn, formatTime, calculateGrade } from '../lib/utils';
-import { AlertTriangle, Clock, ShieldAlert, CheckCircle2, ChevronRight, XCircle, Lock } from 'lucide-react';
+import { cn, formatTime, calculateGrade, generateId } from '../lib/utils';
+import { AlertTriangle, Clock, ShieldAlert, CheckCircle2, ChevronRight, XCircle, Lock, BookOpen } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 
 interface StudentQuizViewProps {
   quiz: Quiz;
-  studentName: string;
-  onComplete: (result: QuizResult) => void;
+  user: User;
+  onComplete: () => void;
   onExit: () => void;
 }
 
-export default function StudentQuizView({ quiz, studentName, onComplete, onExit }: StudentQuizViewProps) {
+export default function StudentQuizView({ quiz, user, onComplete, onExit }: StudentQuizViewProps) {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
+  const [selectedAnswer, setSelectedAnswer] = useState<number | number[] | string | null>(null);
   const [score, setScore] = useState(0);
+  const [answers, setAnswers] = useState<(number | number[] | string)[]>([]);
   const [timeLeft, setTimeLeft] = useState(quiz.timeLimitPerQuestion);
   const [violations, setViolations] = useState<Violation[]>([]);
   const [isQuizStarted, setIsQuizStarted] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const startTimeRef = useRef(Date.now());
 
   const handleViolation = useCallback((v: Violation) => {
@@ -32,27 +36,34 @@ export default function StudentQuizView({ quiz, studentName, onComplete, onExit 
     onViolation: handleViolation
   });
 
-  // Check if quiz is locked
-  if (quiz.isLocked && !isQuizStarted) {
+  // Check if quiz is locked or out of schedule
+  const now = Date.now();
+  const isOutOfSchedule = (quiz.startTime && now < quiz.startTime) || (quiz.endTime && now > quiz.endTime);
+
+  if ((quiz.isLocked || isOutOfSchedule) && !isQuizStarted) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 text-white text-center">
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-md">
-           <div className="w-20 h-20 bg-amber-500/20 rounded-3xl flex items-center justify-center mx-auto mb-8 border border-amber-500/30 shadow-xl shadow-amber-500/10">
-              <Lock className="w-10 h-10 text-amber-500" />
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 text-slate-900 text-center font-sans">
+        <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="max-w-md">
+           <div className="w-24 h-24 bg-amber-50 rounded-[2rem] flex items-center justify-center mx-auto mb-10 border border-amber-200 shadow-xl relative">
+              <Lock className="w-12 h-12 text-amber-600" />
+              <div className="absolute inset-0 bg-amber-600/5 blur-xl animate-pulse -z-10" />
            </div>
-           <h2 className="text-4xl font-black mb-4 tracking-tight">Access Restricted</h2>
-           <p className="text-slate-400 text-lg mb-10 leading-relaxed italic">
-             "Professor {quiz.teacherId === 'u1' ? 'Sarah Wilson' : 'Administrator'} has locked this assessment. No further submissions are being accepted at this time."
+           <h2 className="text-4xl font-black mb-6 tracking-tighter leading-tight uppercase italic">Access Protocol Revoked</h2>
+           <p className="text-slate-500 text-lg mb-12 leading-relaxed italic opacity-80 px-4 font-medium">
+             "The administration has restricted access to <span className="text-indigo-600 font-bold NOT-italic">{quiz.title}</span>. Session window has closed or manual override is active."
            </p>
-           <button onClick={onExit} className="bg-white text-slate-900 px-10 py-4 rounded-2xl font-black uppercase tracking-widest hover:bg-slate-100 transition-all">
-             Return to Portal
+           <button 
+            onClick={onExit} 
+            className="bg-indigo-600 text-white px-12 py-5 rounded-2xl font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 active:scale-95"
+           >
+             Exit Environment
            </button>
         </motion.div>
       </div>
-    )
+    );
   }
 
-  // Quiz Timer
+  // Quiz Timer Logic
   useEffect(() => {
     if (!isQuizStarted || isComplete) return;
 
@@ -70,73 +81,134 @@ export default function StudentQuizView({ quiz, studentName, onComplete, onExit 
 
   const handleNext = () => {
     const currentQuestion = quiz.questions[currentQuestionIndex];
+    let isCorrect = false;
+
+    if (currentQuestion.type === 'single') {
+      isCorrect = selectedAnswer === currentQuestion.correctAnswer;
+    } else if (currentQuestion.type === 'multiple') {
+      const selected = (selectedAnswer as number[]) || [];
+      const correct = (currentQuestion.correctAnswer as number[]) || [];
+      isCorrect = selected.length === correct.length && selected.every(val => correct.includes(val));
+    } else if (currentQuestion.type === 'text') {
+      const selected = (selectedAnswer as string || '').toLowerCase().trim();
+      const correct = (currentQuestion.correctAnswer as string || '').toLowerCase().trim();
+      isCorrect = selected.includes(correct) || correct.includes(selected);
+    }
+
     let newScore = score;
-    if (selectedAnswer === currentQuestion.correctAnswer) {
+    if (isCorrect) {
       newScore += 1;
       setScore(newScore);
     }
+
+    const updatedAnswers = [...answers, selectedAnswer as (number | number[] | string)];
+    setAnswers(updatedAnswers);
 
     if (currentQuestionIndex < quiz.questions.length - 1) {
       setCurrentQuestionIndex(prev => prev + 1);
       setSelectedAnswer(null);
       setTimeLeft(quiz.timeLimitPerQuestion);
     } else {
-      finishQuiz(newScore);
+      finishQuiz(newScore, updatedAnswers);
     }
   };
 
-  const finishQuiz = (finalScore: number) => {
-    setIsComplete(true);
+  const finishQuiz = async (finalScore: number, finalAnswers: (number | number[] | string)[]) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    
+    const resultId = generateId();
     const result: QuizResult = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: resultId,
       quizId: quiz.id,
-      studentId: 's-current',
-      studentName,
+      studentId: user.uid,
+      studentName: user.name,
+      teacherId: quiz.teacherId,
       score: finalScore,
       grade: calculateGrade(finalScore, quiz.questions.length, quiz.gradeScale),
       totalQuestions: quiz.questions.length,
       violations,
+      answers: finalAnswers,
       timeTaken: Math.floor((Date.now() - startTimeRef.current) / 1000),
       completedAt: Date.now()
     };
-    
-    if (finalScore / quiz.questions.length >= 0.7) {
-      confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
-    }
 
-    onComplete(result);
+    try {
+      await setDoc(doc(db, 'results', resultId), result);
+      
+      if (finalScore / quiz.questions.length >= 0.7) {
+        confetti({ 
+          particleCount: 200, 
+          spread: 80, 
+          origin: { y: 0.6 },
+          colors: ['#2563eb', '#10b981', '#f59e0b']
+        });
+      }
+      
+      setIsComplete(true);
+      setTimeout(() => onComplete(), 1500);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `results/${resultId}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (!isQuizStarted) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 text-white">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-8 text-slate-900 font-sans overflow-hidden">
         <motion.div 
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
-          className="max-w-md w-full bg-slate-800 p-8 rounded-3xl border border-white/10 shadow-2xl text-center"
+          className="max-w-2xl w-full bg-white p-16 rounded-[4rem] border border-slate-200 shadow-2xl relative"
         >
-          <ShieldAlert className="w-16 h-16 text-blue-400 mx-auto mb-6" />
-          <h2 className="text-3xl font-bold mb-4">Security Requirement</h2>
-          <p className="text-slate-400 mb-8 leading-relaxed">
-            This quiz requires <span className="text-white font-semibold">mandatory Full-Screen Mode</span> for integrity. 
-            Any attempt to exit full-screen or switch tabs will be logged as a violation.
+          <div className="absolute top-0 right-10 w-40 h-40 bg-indigo-600/5 rounded-full blur-[80px] pointer-events-none" />
+          
+          <div className="w-24 h-24 bg-indigo-600 rounded-[2rem] flex items-center justify-center mx-auto mb-10 shadow-3xl shadow-indigo-100">
+             <ShieldAlert className="w-12 h-12 text-white" />
+          </div>
+          
+          <h2 className="text-5xl font-black mb-6 tracking-tighter leading-none uppercase italic">Security Environment</h2>
+          <p className="text-slate-500 text-xl mb-12 leading-relaxed font-medium italic">
+            "This module requires <span className="text-indigo-600 font-bold">Mandatory Full-Screen Logic</span>. 
+            Infractions such as tab-switching or focus-loss will be logged in the permanent record."
           </p>
-          <div className="space-y-4">
+          
+          <div className="space-y-6 max-w-sm mx-auto">
              <button
-              onClick={() => {
-                enterFullscreen();
-                setIsQuizStarted(true);
-                startTimeRef.current = Date.now();
-              }}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-colors flex items-center justify-center gap-2"
-            >
-              <CheckCircle2 className="w-5 h-5" /> START SECURE SESSION
-            </button>
-            <button onClick={onExit} className="w-full text-slate-500 hover:text-slate-300 transition-colors text-sm font-medium">
-              Go Back
-            </button>
+               onClick={() => {
+                 enterFullscreen();
+                 setIsQuizStarted(true);
+                 startTimeRef.current = Date.now();
+               }}
+               className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-6 rounded-2xl transition-all shadow-xl shadow-indigo-100 active:scale-95 flex items-center justify-center gap-3 text-lg uppercase tracking-widest"
+             >
+               <CheckCircle2 className="w-6 h-6" /> Authenticate & Start
+             </button>
+             <button onClick={onExit} className="w-full text-slate-400 hover:text-slate-600 transition-colors text-xs font-black uppercase tracking-widest">
+               Abort Protocol
+             </button>
           </div>
         </motion.div>
+      </div>
+    );
+  }
+
+  if (isComplete) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-8 text-slate-900 font-sans text-center">
+         <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="max-w-md">
+            <div className="w-24 h-24 bg-emerald-50 rounded-[2rem] flex items-center justify-center mx-auto mb-10 border border-emerald-100 shadow-xl shadow-emerald-600/5">
+               <CheckCircle2 className="w-12 h-12 text-emerald-600" />
+            </div>
+            <h2 className="text-4xl font-black mb-4 tracking-tighter uppercase italic">Transmission Successful</h2>
+            <p className="text-slate-500 text-lg mb-4 italic font-medium">
+              "Your assessment data has been encrypted and committed to the registry."
+            </p>
+            <div className="animate-pulse flex items-center justify-center gap-2 text-emerald-600 text-sm font-black uppercase tracking-widest">
+               Synchronizing with Server...
+            </div>
+         </motion.div>
       </div>
     );
   }
@@ -146,140 +218,184 @@ export default function StudentQuizView({ quiz, studentName, onComplete, onExit 
   const timeProgress = (timeLeft / quiz.timeLimitPerQuestion) * 100;
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans select-none">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans select-none overflow-hidden">
       {/* Quiz Header */}
-      <header className="bg-white border-b border-slate-200 px-8 py-4 flex justify-between items-center sticky top-0 z-50">
-        <div className="flex items-center gap-6">
-          <div className="hidden sm:block">
-             <h1 className="font-bold text-slate-900 truncate max-w-[200px]">{quiz.title}</h1>
-             <p className="text-xs text-slate-400 font-mono">SECURE MODE ACTIVE</p>
+      <header className="bg-white border-b border-slate-200 px-10 py-5 flex justify-between items-center sticky top-0 z-50">
+        <div className="flex items-center gap-10">
+          <div className="hidden lg:flex items-center gap-4">
+             <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black shadow-lg">Q</div>
+             <div>
+                <h1 className="font-black text-slate-900 tracking-tight leading-none mb-1 text-sm">{quiz.title}</h1>
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] leading-none">Security Environment v4.1</p>
+             </div>
           </div>
-          <div className="h-8 w-px bg-slate-200 hidden sm:block" />
+          <div className="h-8 w-px bg-slate-200 hidden lg:block" />
           <div className="space-y-1">
-             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-none">Question</p>
-             <p className="text-sm font-black text-slate-900 leading-none">{currentQuestionIndex + 1} of {quiz.questions.length}</p>
+             <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest leading-none">Challenge</p>
+             <p className="text-lg font-black text-slate-900 leading-none">{currentQuestionIndex + 1} <span className="text-slate-300 font-medium">/ {quiz.questions.length}</span></p>
           </div>
         </div>
 
-        <div className="flex items-center gap-4 sm:gap-12">
+        <div className="flex items-center gap-6 sm:gap-16">
           {/* Violations Counter */}
           <div className={cn(
-            "flex items-center gap-2 px-3 py-1 rounded-full border transition-colors",
-            violations.length > 0 ? "bg-red-50 border-red-200 text-red-600" : "bg-slate-50 border-slate-100 text-slate-400"
+            "flex items-center gap-3 px-5 py-2 rounded-2xl border transition-all shadow-sm",
+            violations.length > 0 ? "bg-red-50 border-red-200 text-red-600 animate-shake" : "bg-slate-50 border-slate-100 text-slate-400 opacity-60"
           )}>
-            <AlertTriangle className="w-4 h-4" />
-            <span className="text-xs font-bold font-mono">{violations.length} INFRACTIONS</span>
+            <AlertTriangle className="w-5 h-5 shrink-0" />
+            <span className="text-xs font-black font-mono tracking-widest">{violations.length} INFRACTIONS</span>
           </div>
 
-          <div className="flex items-center gap-3">
-             <Clock className={cn("w-6 h-6", timeLeft < 10 ? "text-red-500 animate-pulse" : "text-blue-600")} />
-             <span className={cn("text-2xl font-black font-mono w-16", timeLeft < 10 ? "text-red-500" : "text-slate-900")}>
-               {formatTime(timeLeft)}
-             </span>
+          <div className="flex items-center gap-4">
+             <div className="text-right hidden sm:block">
+                <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest leading-none mb-1">Time Remaining</p>
+                <p className={cn("text-2xl font-black font-mono leading-none tracking-tighter", timeLeft < 10 ? "text-red-500" : "text-blue-600")}>
+                  {formatTime(timeLeft)}
+                </p>
+             </div>
+             <div className={cn(
+               "w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg transition-colors",
+               timeLeft < 10 ? "bg-red-500 text-white animate-pulse" : "bg-blue-600 text-white"
+             )}>
+                <Clock className="w-6 h-6" />
+             </div>
           </div>
         </div>
       </header>
 
       {/* Progress Bar (Time) */}
-      <div className="h-1.5 w-full bg-slate-100 relative">
+      <div className="h-2 w-full bg-slate-100 relative overflow-hidden">
         <motion.div 
-          className={cn("absolute h-full left-0", timeLeft < 10 ? "bg-red-500" : "bg-blue-600")}
+          className={cn("absolute h-full left-0", timeLeft < 10 ? "bg-red-500" : "bg-blue-500")}
           initial={{ width: "100%" }}
           animate={{ width: `${timeProgress}%` }}
           transition={{ duration: 1, ease: "linear" }}
         />
       </div>
 
-      <main className="flex-1 flex overflow-hidden">
+      <main className="flex-1 flex overflow-hidden p-8 sm:p-20">
         <AnimatePresence mode="wait">
           <motion.div 
             key={currentQuestionIndex}
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            className="w-full max-w-4xl mx-auto p-6 flex flex-col justify-center"
+            initial={{ opacity: 0, x: 40, filter: "blur(10px)" }}
+            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, x: -40, filter: "blur(10px)" }}
+            className="w-full max-w-5xl mx-auto flex flex-col justify-center gap-12"
           >
-            <div className="mb-12">
-               <h2 className="text-3xl sm:text-4xl font-bold text-slate-900 leading-tight mb-4">
+            <div className="space-y-8">
+               <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-blue-50 text-blue-600 rounded-full text-[10px] font-black uppercase tracking-widest border border-blue-100">
+                  <BookOpen className="w-3 h-3" /> Question {currentQuestionIndex + 1}
+               </div>
+               <h2 className="text-4xl sm:text-6xl font-black text-slate-900 leading-[1.1] tracking-tighter max-w-4xl">
                  {currentQuestion.text}
                </h2>
-               <div className="w-24 h-1.5 bg-blue-600 rounded-full" />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {currentQuestion.options.map((option, index) => (
-                <button
-                  key={index}
-                  onClick={() => setSelectedAnswer(index)}
-                  className={cn(
-                    "relative p-6 text-left border-2 rounded-2xl transition-all duration-200 group transform active:scale-[0.98]",
-                    selectedAnswer === index 
-                      ? "border-blue-600 bg-blue-50/50 shadow-md ring-2 ring-blue-600/10" 
-                      : "border-slate-200 bg-white hover:border-blue-300 hover:bg-slate-50"
-                  )}
-                >
-                  <div className="flex items-start gap-4">
-                    <span className={cn(
-                      "w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm shrink-0",
-                      selectedAnswer === index ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-400 group-hover:bg-blue-100"
-                    )}>
-                      {String.fromCharCode(65 + index)}
-                    </span>
-                    <span className={cn(
-                      "text-lg font-medium",
-                      selectedAnswer === index ? "text-blue-900" : "text-slate-700"
-                    )}>
-                      {option}
-                    </span>
-                  </div>
-                  {selectedAnswer === index && (
-                    <div className="absolute top-4 right-4">
-                      <div className="w-2 h-2 rounded-full bg-blue-600" />
-                    </div>
-                  )}
-                </button>
-              ))}
-            </div>
+            {currentQuestion.type === 'text' ? (
+              <div className="w-full max-w-3xl">
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 px-2">Written Response</label>
+                <textarea
+                  rows={4}
+                  value={selectedAnswer as string || ''}
+                  onChange={e => setSelectedAnswer(e.target.value)}
+                  placeholder="Type your response here..."
+                  className="w-full bg-white p-8 rounded-[2rem] border-3 border-slate-100 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 outline-none font-bold text-xl text-slate-900 transition-all shadow-sm placeholder:opacity-30 italic"
+                />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pb-20">
+                {currentQuestion.options.map((option, index) => {
+                  const isSelected = currentQuestion.type === 'single' 
+                    ? selectedAnswer === index 
+                    : (selectedAnswer as number[] || []).includes(index);
+
+                  return (
+                    <button
+                      key={index}
+                      onClick={() => {
+                        if (currentQuestion.type === 'single') {
+                          setSelectedAnswer(index);
+                        } else {
+                          const current = (selectedAnswer as number[] || []);
+                          const updated = current.includes(index)
+                            ? current.filter(i => i !== index)
+                            : [...current, index].sort();
+                          setSelectedAnswer(updated);
+                        }
+                      }}
+                      className={cn(
+                        "group relative p-8 text-left border-3 rounded-[2.5rem] transition-all duration-300 transform hover:scale-[1.01] active:scale-[0.98] shadow-sm",
+                        isSelected 
+                          ? "border-blue-600 bg-blue-50 shadow-2xl shadow-blue-600/10 ring-4 ring-blue-600/5" 
+                          : "border-slate-100 bg-white hover:border-blue-200 hover:bg-slate-50"
+                      )}
+                    >
+                      <span className="flex items-start gap-6">
+                        <span className={cn(
+                          "w-12 h-12 rounded-2xl flex items-center justify-center font-black text-lg shrink-0 transition-all border-2",
+                          isSelected 
+                            ? "bg-blue-600 text-white border-blue-500 rotate-12" 
+                            : "bg-slate-50 text-slate-400 group-hover:bg-blue-100 group-hover:text-blue-600 border-slate-100"
+                        )}>
+                          {String.fromCharCode(65 + index)}
+                        </span>
+                        <span className={cn(
+                          "text-xl font-bold pt-2.5",
+                          isSelected ? "text-blue-900" : "text-slate-600"
+                        )}>
+                          {option}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </motion.div>
         </AnimatePresence>
       </main>
 
-      <footer className="bg-white border-t border-slate-200 p-8">
-        <div className="max-w-4xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <div className="w-48 h-3 bg-slate-100 rounded-full overflow-hidden">
-               <div className="h-full bg-blue-600 transition-all duration-500" style={{ width: `${progress}%` }} />
+      <footer className="bg-white border-t border-slate-200 p-10 mt-auto">
+        <div className="max-w-5xl mx-auto flex justify-between items-center">
+          <div className="flex items-center gap-6">
+            <div className="w-64 h-4 bg-slate-100 rounded-full overflow-hidden border border-slate-200/50">
+               <motion.div 
+                className="h-full bg-indigo-600 rounded-full shadow-[0_0_15px_rgba(79,70,229,0.3)]" 
+                initial={{ width: 0 }}
+                animate={{ width: `${progress}%` }}
+                transition={{ duration: 1, ease: "circOut" }}
+               />
             </div>
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">{Math.round(progress)}% Progress</span>
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{Math.round(progress)}% Mastery</span>
           </div>
 
           <button
             onClick={handleNext}
-            disabled={selectedAnswer === null}
-            className="bg-slate-900 hover:bg-slate-800 disabled:opacity-20 text-white px-10 py-4 rounded-xl font-bold flex items-center gap-2 transition-all"
+            disabled={(selectedAnswer === null || (Array.isArray(selectedAnswer) && selectedAnswer.length === 0) || (typeof selectedAnswer === 'string' && selectedAnswer.trim() === '')) || isSubmitting}
+            className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-20 text-white px-12 py-5 rounded-[1.5rem] font-black flex items-center gap-4 transition-all shadow-xl shadow-indigo-100 active:scale-95 group text-lg uppercase tracking-widest"
           >
-            {currentQuestionIndex === quiz.questions.length - 1 ? 'Finish Quiz' : 'Next Question'}
-            <ChevronRight className="w-5 h-5" />
+            {isSubmitting ? 'Transmitting...' : (currentQuestionIndex === quiz.questions.length - 1 ? 'Commit Session' : 'Next Question')}
+            <ChevronRight className="w-6 h-6 group-hover:translate-x-1 transition-transform" />
           </button>
         </div>
       </footer>
 
       {/* Security Overlays */}
       {!isFullscreen && isQuizStarted && !isComplete && (
-        <div className="fixed inset-0 z-[9999] bg-red-600/90 backdrop-blur-md flex items-center justify-center p-6 text-white text-center">
-          <div className="max-w-md">
-            <ShieldAlert className="w-20 h-20 mx-auto mb-6 animate-bounce" />
-            <h2 className="text-3xl font-bold mb-4 uppercase tracking-tighter">Security Alert</h2>
-            <p className="text-xl font-medium mb-8">
-              Full-screen mode was exited. An infraction has been recorded.
+        <div className="fixed inset-0 z-[9999] bg-red-600/95 backdrop-blur-3xl flex items-center justify-center p-8 text-white text-center">
+          <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} className="max-w-xl">
+            <ShieldAlert className="w-32 h-32 mx-auto mb-10 text-white animate-pulse" />
+            <h2 className="text-6xl font-black mb-6 tracking-tighter uppercase">Protocol Violation</h2>
+            <p className="text-2xl font-bold mb-12 leading-relaxed opacity-90 max-w-lg mx-auto">
+              Mandatory focus-integrity lost. All interactions have been suspended until re-authentication.
             </p>
             <button
               onClick={enterFullscreen}
-              className="bg-white text-red-600 px-8 py-4 rounded-xl font-black text-lg hover:bg-slate-100 transition-colors uppercase tracking-widest"
+              className="bg-white text-red-600 px-12 py-6 rounded-3xl font-black text-xl hover:bg-slate-100 transition-all shadow-4xl uppercase tracking-widest active:scale-95"
             >
-              Re-enter Secure Session
+              Re-establish Session
             </button>
-          </div>
+          </motion.div>
         </div>
       )}
     </div>

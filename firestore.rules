@@ -1,0 +1,120 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper Functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // In a production environment, we would use email_verified, 
+    // but for this prototype registration flow where users are created 
+    // programmatically (secondary app), we allow unverified access.
+    function isVerified() {
+      return isSignedIn(); // Simplified for development
+    }
+
+    function getUserDoc(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data;
+    }
+
+    function hasUserDoc(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid));
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'it.support@mekaria.edu.ng' || 
+        (hasUserDoc(request.auth.uid) && getUserDoc(request.auth.uid).role == 'admin')
+      );
+    }
+
+    function isTeacher() {
+      return isSignedIn() && 
+             hasUserDoc(request.auth.uid) && 
+             getUserDoc(request.auth.uid).role == 'teacher';
+    }
+
+    function isStudent() {
+      return isSignedIn() && 
+             hasUserDoc(request.auth.uid) && 
+             getUserDoc(request.auth.uid).role == 'student';
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // User Profiles
+    match /users/{userId} {
+      allow read: if isSignedIn() && (
+        isOwner(userId) || 
+        isAdmin() || 
+        (isTeacher() && (resource.data.role == 'student' || request.auth.uid in resource.data.teacherIds))
+      );
+      
+      allow create: if isSignedIn() && (
+        isAdmin() || 
+        isOwner(userId) ||
+        (isTeacher() && incoming().role == 'student' && request.auth.uid in incoming().teacherIds)
+      );
+
+      allow update: if isSignedIn() && (
+        isAdmin() || 
+        (isOwner(userId) && 
+         incoming().role == existing().role && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'teacherIds'])) ||
+        (isTeacher() && 
+         existing().role == 'student' && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['teacherIds', 'role']))
+      );
+      
+      allow delete: if isAdmin();
+    }
+
+    // Quizzes
+    match /quizzes/{quizId} {
+      allow read: if isSignedIn() && (
+        isAdmin() || 
+        resource.data.teacherId == request.auth.uid ||
+        (isStudent() && (resource.data.teacherId in getUserDoc(request.auth.uid).teacherIds || resource.data.teacherId == 'admin')) ||
+        (exists(/databases/$(database)/documents/quizzes/$(quizId))) // Allow single get for join search
+      );
+      allow create: if isAdmin() || isTeacher();
+      allow update, delete: if isAdmin() || (isTeacher() && existing().teacherId == request.auth.uid);
+    }
+
+    // Results
+    match /results/{resultId} {
+      allow read: if isSignedIn() && (
+        isAdmin() || 
+        resource.data.studentId == request.auth.uid ||
+        resource.data.teacherId == request.auth.uid
+      );
+      allow create: if isSignedIn() && incoming().studentId == request.auth.uid;
+      allow update: if isAdmin() || (isTeacher() && existing().teacherId == request.auth.uid);
+      allow delete: if isAdmin();
+      
+      // Violations
+      match /violations/{vId} {
+        allow read, write: if isSignedIn() && (
+          isAdmin() || 
+          isTeacher() || 
+          get(/databases/$(database)/documents/results/$(resultId)).data.studentId == request.auth.uid
+        );
+      }
+    }
+  }
+}
