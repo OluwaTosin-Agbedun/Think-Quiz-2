@@ -1,4 +1,4 @@
-name: Sync with upstream
+name: Sync from first repo
 
 on:
   schedule:
@@ -14,19 +14,39 @@ jobs:
 
     steps:
       - name: Checkout second repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Sync from first repo
+      - name: Clone first repo
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          rm -rf /tmp/upstream
+          git clone https://x-access-token:${{ secrets.UPSTREAM_TOKEN }}@github.com/TheTechGuyJerry/Think-Quiz.git /tmp/upstream
 
-          git remote add upstream https://x-access-token:${{ secrets.UPSTREAM_TOKEN }}@github.com/thetechguyjerry/Think-uiz.git
-          git fetch upstream
+      - name: Copy first repo into second repo
+        run: |
+          mkdir -p /tmp/current-workflow
+          cp -f .github/workflows/sync-upstream.yml /tmp/current-workflow/sync-upstream.yml || true
 
-          git checkout main || git checkout -b main
-          git merge upstream/main --allow-unrelated-histories --no-edit
-          git push origin main
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+
+          rsync -a --delete --exclude='.git' /tmp/upstream/ ./
+
+          mkdir -p .github/workflows
+          cp -f /tmp/current-workflow/sync-upstream.yml .github/workflows/sync-upstream.yml || true
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to sync."
+            exit 0
+          fi
+
+          git commit -m "Sync from TheTechGuyJerry/Think-Quiz"
+          git push
