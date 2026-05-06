@@ -45,7 +45,8 @@ export interface QuizResult {
   grade: string;
   totalQuestions: number;
   violations: Violation[];
-  answers: (number | number[] | string)[];
+  questions: Question[];
+  answers: (number | number[] | string | null)[];
   timeTaken: number;
   completedAt: number;
 }

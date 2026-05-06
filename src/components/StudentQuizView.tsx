@@ -17,15 +17,21 @@ interface StudentQuizViewProps {
 
 export default function StudentQuizView({ quiz, user, onComplete, onExit }: StudentQuizViewProps) {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [answers, setAnswers] = useState<(number | number[] | string | null)[]>(new Array(quiz.questions.length).fill(null));
   const [selectedAnswer, setSelectedAnswer] = useState<number | number[] | string | null>(null);
-  const [score, setScore] = useState(0);
-  const [answers, setAnswers] = useState<(number | number[] | string)[]>([]);
-  const [timeLeft, setTimeLeft] = useState(quiz.timeLimitPerQuestion);
   const [violations, setViolations] = useState<Violation[]>([]);
   const [isQuizStarted, setIsQuizStarted] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showNavigator, setShowNavigator] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(quiz.timeLimitPerQuestion);
   const startTimeRef = useRef(Date.now());
+
+  // Sync selected answer when question changes
+  useEffect(() => {
+    setSelectedAnswer(answers[currentQuestionIndex]);
+    setTimeLeft(quiz.timeLimitPerQuestion);
+  }, [currentQuestionIndex, quiz.questions.length]);
 
   const handleViolation = useCallback((v: Violation) => {
     setViolations(prev => [...prev, v]);
@@ -68,7 +74,11 @@ export default function StudentQuizView({ quiz, user, onComplete, onExit }: Stud
     if (!isQuizStarted || isComplete) return;
 
     if (timeLeft <= 0) {
-      handleNext();
+      if (currentQuestionIndex < quiz.questions.length - 1) {
+        handleNext();
+      } else {
+        finishQuiz();
+      }
       return;
     }
 
@@ -79,44 +89,57 @@ export default function StudentQuizView({ quiz, user, onComplete, onExit }: Stud
     return () => clearInterval(timer);
   }, [isQuizStarted, isComplete, timeLeft]);
 
+  const saveCurrentAnswer = (answer: any) => {
+    const newAnswers = [...answers];
+    newAnswers[currentQuestionIndex] = answer;
+    setAnswers(newAnswers);
+  };
+
   const handleNext = () => {
-    const currentQuestion = quiz.questions[currentQuestionIndex];
-    let isCorrect = false;
-
-    if (currentQuestion.type === 'single') {
-      isCorrect = selectedAnswer === currentQuestion.correctAnswer;
-    } else if (currentQuestion.type === 'multiple') {
-      const selected = (selectedAnswer as number[]) || [];
-      const correct = (currentQuestion.correctAnswer as number[]) || [];
-      isCorrect = selected.length === correct.length && selected.every(val => correct.includes(val));
-    } else if (currentQuestion.type === 'text') {
-      const selected = (selectedAnswer as string || '').toLowerCase().trim();
-      const correct = (currentQuestion.correctAnswer as string || '').toLowerCase().trim();
-      isCorrect = selected.includes(correct) || correct.includes(selected);
-    }
-
-    let newScore = score;
-    if (isCorrect) {
-      newScore += 1;
-      setScore(newScore);
-    }
-
-    const updatedAnswers = [...answers, selectedAnswer as (number | number[] | string)];
-    setAnswers(updatedAnswers);
-
+    saveCurrentAnswer(selectedAnswer);
     if (currentQuestionIndex < quiz.questions.length - 1) {
       setCurrentQuestionIndex(prev => prev + 1);
-      setSelectedAnswer(null);
-      setTimeLeft(quiz.timeLimitPerQuestion);
     } else {
-      finishQuiz(newScore, updatedAnswers);
+      finishQuiz();
     }
   };
 
-  const finishQuiz = async (finalScore: number, finalAnswers: (number | number[] | string)[]) => {
+  const handlePrevious = () => {
+    saveCurrentAnswer(selectedAnswer);
+    if (currentQuestionIndex > 0) {
+      setCurrentQuestionIndex(prev => prev - 1);
+    }
+  };
+
+  const finishQuiz = async () => {
     if (isSubmitting) return;
     setIsSubmitting(true);
     
+    // Save the final answer first
+    const finalAnswers = [...answers];
+    finalAnswers[currentQuestionIndex] = selectedAnswer;
+
+    // Calculate score
+    let finalScore = 0;
+    quiz.questions.forEach((q, idx) => {
+      const studentAnswer = finalAnswers[idx];
+      let isCorrect = false;
+
+      if (q.type === 'single') {
+        isCorrect = studentAnswer === q.correctAnswer;
+      } else if (q.type === 'multiple') {
+        const selected = (studentAnswer as number[]) || [];
+        const correct = (q.correctAnswer as number[]) || [];
+        isCorrect = selected.length === correct.length && selected.every(val => correct.includes(val));
+      } else if (q.type === 'text') {
+        const selected = (studentAnswer as string || '').toLowerCase().trim();
+        const correct = (q.correctAnswer as string || '').toLowerCase().trim();
+        isCorrect = selected.includes(correct) || correct.includes(selected);
+      }
+
+      if (isCorrect) finalScore += 1;
+    });
+
     const resultId = generateId();
     const result: QuizResult = {
       id: resultId,
@@ -128,6 +151,7 @@ export default function StudentQuizView({ quiz, user, onComplete, onExit }: Stud
       grade: calculateGrade(finalScore, quiz.questions.length, quiz.gradeScale),
       totalQuestions: quiz.questions.length,
       violations,
+      questions: quiz.questions,
       answers: finalAnswers,
       timeTaken: Math.floor((Date.now() - startTimeRef.current) / 1000),
       completedAt: Date.now()
@@ -230,13 +254,24 @@ export default function StudentQuizView({ quiz, user, onComplete, onExit }: Stud
              </div>
           </div>
           <div className="h-8 w-px bg-slate-200 hidden lg:block" />
-          <div className="space-y-1">
-             <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest leading-none">Challenge</p>
-             <p className="text-lg font-black text-slate-900 leading-none">{currentQuestionIndex + 1} <span className="text-slate-300 font-medium">/ {quiz.questions.length}</span></p>
-          </div>
+          
+          <button 
+            onClick={() => setShowNavigator(!showNavigator)}
+            className={cn(
+              "flex items-center gap-3 px-4 py-2.5 rounded-xl border-2 transition-all font-black text-[10px] uppercase tracking-widest",
+              showNavigator ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-50 border-slate-100 text-slate-400 hover:border-slate-200"
+            )}
+          >
+            <BookOpen className="w-4 h-4" /> Questions Grid
+          </button>
         </div>
 
         <div className="flex items-center gap-6 sm:gap-16">
+          <div className="hidden md:flex flex-col space-y-1">
+             <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest leading-none">Challenge</p>
+             <p className="text-lg font-black text-slate-900 leading-none">{currentQuestionIndex + 1} <span className="text-slate-300 font-medium">/ {quiz.questions.length}</span></p>
+          </div>
+
           {/* Violations Counter */}
           <div className={cn(
             "flex items-center gap-3 px-5 py-2 rounded-2xl border transition-all shadow-sm",
@@ -272,6 +307,45 @@ export default function StudentQuizView({ quiz, user, onComplete, onExit }: Stud
           transition={{ duration: 1, ease: "linear" }}
         />
       </div>
+
+      <AnimatePresence>
+        {showNavigator && (
+          <motion.div 
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="bg-white border-b border-slate-200 overflow-hidden"
+          >
+            <div className="max-w-5xl mx-auto p-10">
+              <div className="grid grid-cols-5 sm:grid-cols-10 gap-3">
+                {quiz.questions.map((_, i) => {
+                  const hasAnswer = answers[i] !== null && answers[i] !== undefined && (typeof answers[i] !== 'string' || (answers[i] as string).trim() !== '') && (!Array.isArray(answers[i]) || (answers[i] as any[]).length > 0);
+                  const isCurrent = currentQuestionIndex === i;
+                  
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        saveCurrentAnswer(selectedAnswer);
+                        setCurrentQuestionIndex(i);
+                        setShowNavigator(false);
+                      }}
+                      className={cn(
+                        "h-12 rounded-xl font-black transition-all border-2 flex items-center justify-center text-xs",
+                        isCurrent ? "bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100" :
+                        hasAnswer ? "bg-emerald-50 border-emerald-200 text-emerald-600" :
+                        "bg-slate-50 border-slate-100 text-slate-400 hover:border-slate-200"
+                      )}
+                    >
+                      {i + 1}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <main className="flex-1 flex overflow-hidden p-8 sm:p-20">
         <AnimatePresence mode="wait">
@@ -356,23 +430,33 @@ export default function StudentQuizView({ quiz, user, onComplete, onExit }: Stud
       </main>
 
       <footer className="bg-white border-t border-slate-200 p-10 mt-auto">
-        <div className="max-w-5xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-6">
-            <div className="w-64 h-4 bg-slate-100 rounded-full overflow-hidden border border-slate-200/50">
-               <motion.div 
-                className="h-full bg-indigo-600 rounded-full shadow-[0_0_15px_rgba(79,70,229,0.3)]" 
-                initial={{ width: 0 }}
-                animate={{ width: `${progress}%` }}
-                transition={{ duration: 1, ease: "circOut" }}
-               />
+        <div className="max-w-5xl mx-auto flex justify-between items-center gap-8">
+          <div className="flex items-center gap-10 flex-1">
+            <div className="hidden md:flex items-center gap-6 flex-1">
+              <div className="w-full max-w-[240px] h-4 bg-slate-100 rounded-full overflow-hidden border border-slate-200/50">
+                 <motion.div 
+                  className="h-full bg-indigo-600 rounded-full shadow-[0_0_15px_rgba(79,70,229,0.3)]" 
+                  initial={{ width: 0 }}
+                  animate={{ width: `${progress}%` }}
+                  transition={{ duration: 1, ease: "circOut" }}
+                 />
+              </div>
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{Math.round(progress)}% Complete</span>
             </div>
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{Math.round(progress)}% Mastery</span>
+            
+            <button
+              onClick={handlePrevious}
+              disabled={currentQuestionIndex === 0 || isSubmitting}
+              className="bg-slate-50 hover:bg-slate-100 disabled:opacity-20 text-slate-400 font-black px-8 py-5 rounded-[1.5rem] flex items-center gap-4 transition-all uppercase tracking-widest text-sm border-2 border-slate-100"
+            >
+              Previous
+            </button>
           </div>
 
           <button
             onClick={handleNext}
-            disabled={(selectedAnswer === null || (Array.isArray(selectedAnswer) && selectedAnswer.length === 0) || (typeof selectedAnswer === 'string' && selectedAnswer.trim() === '')) || isSubmitting}
-            className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-20 text-white px-12 py-5 rounded-[1.5rem] font-black flex items-center gap-4 transition-all shadow-xl shadow-indigo-100 active:scale-95 group text-lg uppercase tracking-widest"
+            disabled={isSubmitting}
+            className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-20 text-white px-12 py-5 rounded-[1.5rem] font-black flex items-center gap-4 transition-all shadow-xl shadow-indigo-100 active:scale-95 group text-lg uppercase tracking-widest shrink-0"
           >
             {isSubmitting ? 'Transmitting...' : (currentQuestionIndex === quiz.questions.length - 1 ? 'Commit Session' : 'Next Question')}
             <ChevronRight className="w-6 h-6 group-hover:translate-x-1 transition-transform" />

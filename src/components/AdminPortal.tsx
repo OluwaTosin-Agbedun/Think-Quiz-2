@@ -5,6 +5,7 @@ import { db } from '../lib/firebase';
 import { collection, query, onSnapshot, doc, updateDoc, deleteDoc, setDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
+import { useNavigate, useLocation, Routes, Route, Navigate } from 'react-router-dom';
 
 interface AdminPortalProps {
   onLogout: () => void;
@@ -19,8 +20,11 @@ export default function AdminPortal({ onLogout }: AdminPortalProps) {
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [results, setResults] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState<'users' | 'quizzes' | 'security'>('users');
   const [assigningStudent, setAssigningStudent] = useState<User | null>(null);
+  
+  const navigate = useNavigate();
+  const location = useLocation();
+  const activeTab = location.pathname.includes('security') ? 'security' : location.pathname.includes('quizzes') ? 'quizzes' : 'users';
   
   const [isCreatingUser, setIsCreatingUser] = useState<User['role'] | null>(null);
   const [newUserForm, setNewUserForm] = useState({ name: '', email: '', password: '' });
@@ -158,19 +162,19 @@ export default function AdminPortal({ onLogout }: AdminPortalProps) {
             icon={<Users className="w-6 h-6" />} 
             label="User Registry" 
             active={activeTab === 'users'} 
-            onClick={() => setActiveTab('users')}
+            onClick={() => navigate('/admin')}
           />
           <SidebarLink 
             icon={<BookOpen className="w-6 h-6" />} 
             label="Knowledge Hub" 
             active={activeTab === 'quizzes'} 
-            onClick={() => setActiveTab('quizzes')}
+            onClick={() => navigate('/admin/quizzes')}
           />
           <SidebarLink 
             icon={<ShieldAlert className="w-6 h-6" />} 
             label="Security Audit" 
             active={activeTab === 'security'} 
-            onClick={() => setActiveTab('security')}
+            onClick={() => navigate('/admin/security')}
           />
         </nav>
 

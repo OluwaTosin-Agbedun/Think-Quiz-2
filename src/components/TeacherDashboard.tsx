@@ -13,22 +13,31 @@ import { db, config, handleFirestoreError, OperationType } from '../lib/firebase
 import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc, addDoc, setDoc, getDocs, arrayUnion } from 'firebase/firestore';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { useNavigate, useParams } from 'react-router-dom';
 
 interface TeacherDashboardProps {
   user: User;
   onLogout: () => void;
   onStartQuizEditor: (quiz?: Quiz) => void;
+  activeTabInitial?: 'overview' | 'students' | 'details';
 }
 
-export default function TeacherDashboard({ user, onLogout, onStartQuizEditor }: TeacherDashboardProps) {
+export default function TeacherDashboard({ user, onLogout, onStartQuizEditor, activeTabInitial = 'overview' }: TeacherDashboardProps) {
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [results, setResults] = useState<QuizResult[]>([]);
   const [assignedStudents, setAssignedStudents] = useState<User[]>([]);
-  const [selectedQuizId, setSelectedQuizId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'students' | 'details'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'students' | 'details'>(activeTabInitial);
   const [isAddingStudent, setIsAddingStudent] = useState(false);
   const [newStudentEmail, setNewStudentEmail] = useState('');
   const [error, setError] = useState('');
+  const [selectedResult, setSelectedResult] = useState<QuizResult | null>(null);
+  
+  const navigate = useNavigate();
+  const { quizId } = useParams();
+
+  useEffect(() => {
+    setActiveTab(activeTabInitial);
+  }, [activeTabInitial]);
 
   useEffect(() => {
     const qQuizzes = query(collection(db, 'quizzes'), where('teacherId', '==', user.uid));
@@ -58,7 +67,7 @@ export default function TeacherDashboard({ user, onLogout, onStartQuizEditor }: 
     if (window.confirm('Are you sure you want to delete this quiz?')) {
       try {
         await deleteDoc(doc(db, 'quizzes', id));
-        if (selectedQuizId === id) setSelectedQuizId(null);
+        if (quizId === id) navigate('/teacher');
       } catch (err) {
         console.error(err);
       }
@@ -162,8 +171,8 @@ export default function TeacherDashboard({ user, onLogout, onStartQuizEditor }: 
     }
   };
 
-  const selectedQuiz = quizzes.find(q => q.id === selectedQuizId);
-  const filteredResults = selectedQuizId ? results.filter(r => r.quizId === selectedQuizId) : results;
+  const selectedQuiz = quizzes.find(q => q.id === quizId);
+  const filteredResults = quizId ? results.filter(r => r.quizId === quizId) : results;
 
   const scoreDistribution = [
     { range: '0-20%', count: filteredResults.filter(r => (r.score / r.totalQuestions) <= 0.2).length },
@@ -183,8 +192,8 @@ export default function TeacherDashboard({ user, onLogout, onStartQuizEditor }: 
         </div>
 
         <nav className="flex-1 space-y-2">
-           <SidebarItem icon={<LayoutDashboard className="w-5 h-5"/>} label="Core Overview" active={activeTab === 'overview'} onClick={() => { setActiveTab('overview'); setSelectedQuizId(null); }} />
-           <SidebarItem icon={<Users className="w-5 h-5"/>} label="Candidate registry" active={activeTab === 'students'} onClick={() => setActiveTab('students')} />
+           <SidebarItem icon={<LayoutDashboard className="w-5 h-5"/>} label="Core Overview" active={activeTab === 'overview'} onClick={() => navigate('/teacher')} />
+           <SidebarItem icon={<Users className="w-5 h-5"/>} label="Candidate registry" active={activeTab === 'students'} onClick={() => navigate('/teacher/students')} />
            
            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest pt-8 pb-3 px-2 border-t border-slate-100 mt-4">Curriculum</p>
            <div className="max-h-[350px] overflow-y-auto custom-scrollbar space-y-1">
@@ -193,8 +202,8 @@ export default function TeacherDashboard({ user, onLogout, onStartQuizEditor }: 
                 key={q.id} 
                 icon={<BookOpen className="w-5 h-5 transition-transform group-hover:rotate-6"/>} 
                 label={q.title} 
-                active={selectedQuizId === q.id} 
-                onClick={() => { setSelectedQuizId(q.id); setActiveTab('details'); }}
+                active={quizId === q.id} 
+                onClick={() => navigate(`/teacher/quiz/${q.id}`)}
                />
              ))}
            </div>
@@ -399,7 +408,7 @@ export default function TeacherDashboard({ user, onLogout, onStartQuizEditor }: 
                  <h2 className="text-2xl font-black tracking-tight flex items-center gap-3">
                     <MousePointer2 className="w-6 h-6 text-blue-500" /> Interaction Log
                  </h2>
-                 <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Target: {selectedQuiz.id}</p>
+                 <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Target: {quizId}</p>
               </div>
               <table className="w-full text-left">
                 <thead>
@@ -412,8 +421,11 @@ export default function TeacherDashboard({ user, onLogout, onStartQuizEditor }: 
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filteredResults.map(res => (
-                    <tr key={res.id} className="hover:bg-slate-50/80 transition-all">
-                      <td className="px-10 py-10 font-black text-slate-900 text-lg">{res.studentName}</td>
+                    <tr key={res.id} className="hover:bg-slate-50/80 transition-all cursor-pointer group" onClick={() => setSelectedResult(res)}>
+                      <td className="px-10 py-10 font-black text-slate-900 text-lg flex items-center gap-3">
+                         {res.studentName}
+                         <ChevronRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-all text-indigo-600" />
+                      </td>
                       <td className="px-10 py-10">
                           <span className={cn(
                             "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border mr-4",
@@ -444,6 +456,104 @@ export default function TeacherDashboard({ user, onLogout, onStartQuizEditor }: 
            </div>
           </motion.div>
         )}
+
+        <AnimatePresence>
+           {selectedResult && (
+             <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/40 backdrop-blur-sm">
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.9 }} 
+                  animate={{ opacity: 1, scale: 1 }} 
+                  exit={{ opacity: 0, scale: 0.9 }} 
+                  className="bg-white rounded-[3.5rem] shadow-2xl max-w-4xl w-full max-h-[85vh] overflow-hidden flex flex-col mx-auto"
+                >
+                    <div className="p-10 pb-6 border-b border-slate-100 flex justify-between items-center shrink-0">
+                       <div>
+                          <h2 className="text-3xl font-black text-slate-900 tracking-tighter mb-1">{selectedResult.studentName}'s Submission</h2>
+                          <p className="text-slate-400 font-black uppercase text-[10px] tracking-widest italic">{selectedResult.quizId} • {new Date(selectedResult.completedAt).toLocaleString()}</p>
+                       </div>
+                       <button onClick={() => setSelectedResult(null)} className="p-3 hover:bg-slate-50 rounded-2xl transition-all">
+                          <X className="w-6 h-6 text-slate-300" />
+                       </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-10 space-y-10 custom-scrollbar">
+                       {selectedResult.questions?.map((q, idx) => {
+                         const studentAnswer = selectedResult.answers[idx];
+                         let isCorrect = false;
+                         if (q.type === 'single') isCorrect = studentAnswer === q.correctAnswer;
+                         else if (q.type === 'multiple') {
+                           const s = (studentAnswer as number[]) || [];
+                           const c = (q.correctAnswer as number[]) || [];
+                           isCorrect = s.length === c.length && s.every(v => c.includes(v));
+                         } else if (q.type === 'text') {
+                           const s = (studentAnswer as string || '').toLowerCase().trim();
+                           const c = (q.correctAnswer as string || '').toLowerCase().trim();
+                           isCorrect = s.includes(c) || c.includes(s);
+                         }
+
+                         return (
+                           <div key={q.id || idx} className={cn(
+                             "p-8 rounded-[2.5rem] border-2 transition-all",
+                             isCorrect ? "bg-emerald-50/50 border-emerald-100" : "bg-red-50/50 border-red-100"
+                           )}>
+                              <div className="flex items-start gap-6 mb-6">
+                                 <div className={cn(
+                                   "w-10 h-10 rounded-xl flex items-center justify-center text-white font-black shrink-0",
+                                   isCorrect ? "bg-emerald-500" : "bg-red-500"
+                                 )}>{idx + 1}</div>
+                                 <h3 className="text-xl font-bold text-slate-900 pt-1.5">{q.text}</h3>
+                              </div>
+
+                              <div className="space-y-3 pl-16">
+                                 <div className="flex gap-4 items-center">
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest w-24">Candidate Input:</span>
+                                    <span className="font-bold text-slate-700">
+                                       {q.type === 'text' ? (studentAnswer as string || 'No response') : 
+                                        q.type === 'multiple' ? (studentAnswer as number[] || []).map(i => q.options[i]).join(', ') : 
+                                        studentAnswer !== null && studentAnswer !== undefined ? q.options[studentAnswer as number] : 'No selection'}
+                                    </span>
+                                 </div>
+                                 <div className="flex gap-4 items-center">
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest w-24">Official Key:</span>
+                                    <span className="font-bold text-indigo-600">
+                                       {q.type === 'text' ? (q.correctAnswer as string) : 
+                                        q.type === 'multiple' ? (q.correctAnswer as number[]).map(i => q.options[i]).join(', ') : 
+                                        q.options[q.correctAnswer as number]}
+                                    </span>
+                                 </div>
+                              </div>
+                           </div>
+                         );
+                       })}
+
+                       {!selectedResult.questions && (
+                         <div className="p-10 text-center bg-slate-50 rounded-3xl border border-slate-100">
+                            <ShieldAlert className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+                            <p className="text-slate-400 font-bold italic">This historical record was captured before Protocol V4. Questions were not snapshotted.</p>
+                         </div>
+                       )}
+                    </div>
+
+                    <div className="p-10 pt-6 border-t border-slate-100 flex justify-between items-center bg-slate-50/50 shrink-0">
+                        <div className="flex gap-8">
+                           <div>
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Execution Time</p>
+                              <p className="font-mono font-black text-lg text-slate-900">{selectedResult.timeTaken}s</p>
+                           </div>
+                           <div>
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Protocol Flags</p>
+                              <p className="font-mono font-black text-lg text-red-600">{selectedResult.violations.length}</p>
+                           </div>
+                        </div>
+                        <div className="text-right">
+                           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Final Clearance</p>
+                           <p className="text-3xl font-black text-indigo-600 tracking-tighter">{selectedResult.score} / {selectedResult.totalQuestions}</p>
+                        </div>
+                    </div>
+                </motion.div>
+             </div>
+           )}
+        </AnimatePresence>
 
         {/* Add Student Overlay */}
         <AnimatePresence>

@@ -1,17 +1,38 @@
 import React, { useState, useEffect } from 'react';
-import { Role, Quiz, User as AppUser, QuizResult } from './types';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { Role, Quiz, User as AppUser } from './types';
 import TeacherDashboard from './components/TeacherDashboard';
 import StudentDashboard from './components/StudentDashboard';
 import AdminPortal from './components/AdminPortal';
 import QuizCreator from './components/QuizCreator';
 import StudentQuizView from './components/StudentQuizView';
 import { Shield, Mail, Lock, Loader2 } from 'lucide-react';
-import { cn } from './lib/utils';
 import { auth, db, signInWithGoogle } from './lib/firebase';
 import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
-export default function App() {
+// Title Manager Component
+function TitleManager() {
+  const location = useLocation();
+  
+  useEffect(() => {
+    const path = location.pathname;
+    let title = 'Think Quiz | Unified Assessment Registry';
+    
+    if (path.includes('admin')) title = 'Admin Control | Think Quiz';
+    if (path.includes('teacher')) title = 'Faculty Dashboard | Think Quiz';
+    if (path.includes('student')) title = 'Candidate Portal | Think Quiz';
+    if (path.includes('creator')) title = 'Curriculum Architect | Think Quiz';
+    if (path.includes('quiz')) title = 'Live Assessment | Think Quiz';
+    if (path === '/login' || path === '/') title = 'Authentication | Think Quiz';
+    
+    document.title = title;
+  }, [location]);
+
+  return null;
+}
+
+function MainApp() {
   const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [authView, setAuthView] = useState<'login' | 'register'>('login');
@@ -19,12 +40,9 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState('');
-
-  const [view, setView] = useState<'dashboard' | 'creator' | 'quiz'>('dashboard');
-  const [activeQuiz, setActiveQuiz] = useState<Quiz | null>(null);
-  const [editingQuiz, setEditingQuiz] = useState<Quiz | null>(null);
-
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  
+  const navigate = useNavigate();
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -71,7 +89,7 @@ export default function App() {
     } catch (err: any) {
       let msg = err.message;
       if (err.code === 'auth/operation-not-allowed') {
-        msg = 'CRITICAL: Email/Password registration is not enabled in Firebase. Please enable it in the Firebase Console (Authentication > Sign-in method).';
+        msg = 'CRITICAL: Email/Password registration is not enabled in Firebase.';
       } else if (err.code === 'auth/invalid-credential') {
         msg = 'Invalid credentials. Please verify your email and security key.';
       }
@@ -87,24 +105,14 @@ export default function App() {
     try {
       await signInWithGoogle();
     } catch (err: any) {
-      if (err.code === 'auth/cancelled-popup-request') {
-        console.warn('Authentication popup already active.');
-        return;
-      }
-      if (err.code === 'auth/popup-closed-by-user') {
-        setError('Authentication was interrupted.');
-      } else {
-        setError(err.message);
-      }
+      setError(err.message);
       setIsAuthenticating(false);
     }
   };
 
   const handleLogout = async () => {
     await signOut(auth);
-    setView('dashboard');
-    setActiveQuiz(null);
-    setEditingQuiz(null);
+    navigate('/');
   };
 
   if (loading) {
@@ -130,9 +138,7 @@ export default function App() {
             <div className="inline-flex items-center gap-2 bg-indigo-600/10 border border-indigo-600/20 text-indigo-600 px-6 py-2.5 rounded-full text-[10px] font-black uppercase tracking-[0.25em] mb-8">
               <Shield className="w-4 h-4" /> Think Quiz v1
             </div>
-            <h1 className="text-5xl font-black text-slate-900 tracking-tighter mb-4 leading-none">
-              Think <br/> Quiz
-            </h1>
+            <h1 className="text-5xl font-black text-slate-900 tracking-tighter mb-4 leading-none">Think <br/> Quiz</h1>
             <p className="text-slate-500 font-medium text-lg">Provide credentials to initialize session.</p>
           </div>
 
@@ -141,85 +147,35 @@ export default function App() {
               {authView === 'register' && (
                 <div className="space-y-2">
                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Entity Name</label>
-                  <input 
-                    type="text" 
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-6 py-4 text-slate-900 outline-none focus:ring-4 focus:ring-indigo-600/10 font-bold transition-all"
-                    placeholder="Enter full legal name"
-                  />
+                  <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-6 py-4 text-slate-900 outline-none focus:ring-4 focus:ring-indigo-600/10 font-bold transition-all" placeholder="Enter full legal name" />
                 </div>
               )}
               <div className="space-y-2">
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Communication Link</label>
                 <div className="relative">
                   <Mail className="absolute left-6 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                  <input 
-                    type="email" 
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-14 pr-6 py-4 text-slate-900 outline-none focus:ring-4 focus:ring-indigo-600/10 font-bold transition-all"
-                    placeholder="entity@domain.com"
-                  />
+                  <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-14 pr-6 py-4 text-slate-900 outline-none focus:ring-4 focus:ring-indigo-600/10 font-bold transition-all" placeholder="entity@domain.com" />
                 </div>
               </div>
               <div className="space-y-2">
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Security Key</label>
                 <div className="relative">
                   <Lock className="absolute left-6 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                  <input 
-                    type="password" 
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-14 pr-6 py-4 text-slate-900 outline-none focus:ring-4 focus:ring-indigo-600/10 font-bold transition-all"
-                    placeholder="••••••••"
-                  />
+                  <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-14 pr-6 py-4 text-slate-900 outline-none focus:ring-4 focus:ring-indigo-600/10 font-bold transition-all" placeholder="••••••••" />
                 </div>
               </div>
-
-              {error && (
-                <div className="bg-red-50 border border-red-100 text-red-600 text-xs font-bold p-4 rounded-xl">
-                  {error}
-                </div>
-              )}
-
-              <button 
-                disabled={isAuthenticating}
-                className="w-full bg-indigo-600 text-white font-black py-5 rounded-2xl hover:bg-indigo-700 transition-all uppercase tracking-widest text-sm shadow-xl shadow-indigo-600/20 active:scale-95 disabled:opacity-50"
-              >
-                {isAuthenticating ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin" /> Authorization...
-                  </span>
-                ) : (
-                  authView === 'login' ? 'Authenticate' : 'Initialize Account'
-                )}
+              {error && <div className="bg-red-50 border border-red-100 text-red-600 text-xs font-bold p-4 rounded-xl">{error}</div>}
+              <button disabled={isAuthenticating} className="w-full bg-indigo-600 text-white font-black py-5 rounded-2xl hover:bg-indigo-700 transition-all uppercase tracking-widest text-sm shadow-xl shadow-indigo-600/20 active:scale-95 disabled:opacity-50">
+                {isAuthenticating ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : (authView === 'login' ? 'Authenticate' : 'Initialize Account')}
               </button>
             </form>
-
             <div className="mt-8 pt-8 border-t border-slate-100">
-              <button 
-                onClick={handleGoogleAuth}
-                disabled={isAuthenticating}
-                className="w-full bg-white border border-slate-200 text-slate-700 font-bold py-4 rounded-2xl hover:bg-slate-50 transition-all flex items-center justify-center gap-3 text-sm uppercase tracking-widest disabled:opacity-50"
-              >
-                {isAuthenticating ? (
-                  <Loader2 className="w-5 h-5 animate-spin text-indigo-600" />
-                ) : (
-                  <>
-                    <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5 rounded-full" />
-                    Google OAuth
-                  </>
-                )}
+              <button onClick={handleGoogleAuth} disabled={isAuthenticating} className="w-full bg-white border border-slate-200 text-slate-700 font-bold py-4 rounded-2xl hover:bg-slate-50 transition-all flex items-center justify-center gap-3 text-sm uppercase tracking-widest disabled:opacity-50">
+                {isAuthenticating ? <Loader2 className="w-5 h-5 animate-spin text-indigo-600" /> : <><img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5 rounded-full" /> Google OAuth</>}
               </button>
             </div>
-
             <p className="mt-8 text-center text-slate-400 text-[10px] font-black uppercase tracking-widest">
-              {authView === 'login' ? (
-                <>New entity? <button onClick={() => setAuthView('register')} className="text-indigo-600 hover:underline">Register</button></>
-              ) : (
-                <>Existing entity? <button onClick={() => setAuthView('login')} className="text-indigo-600 hover:underline">Login</button></>
-              )}
+              {authView === 'login' ? <>New entity? <button onClick={() => setAuthView('register')} className="text-indigo-600 hover:underline">Register</button></> : <>Existing entity? <button onClick={() => setAuthView('login')} className="text-indigo-600 hover:underline">Login</button></>}
             </p>
           </div>
         </div>
@@ -227,76 +183,54 @@ export default function App() {
     );
   }
 
-  if (user.role === 'admin') {
-    return <AdminPortal onLogout={handleLogout} />;
-  }
+  return (
+    <Routes>
+      <Route path="/" element={<Navigate to={`/${user.role}`} replace />} />
+      <Route path="/admin/*" element={user.role === 'admin' ? <AdminPortal onLogout={handleLogout} /> : <Navigate to="/" replace />} />
+      <Route path="/teacher/*" element={user.role === 'teacher' ? <TeacherRoutes user={user} onLogout={handleLogout} /> : <Navigate to="/" replace />} />
+      <Route path="/student/*" element={user.role === 'student' ? <StudentRoutes user={user} onLogout={handleLogout} /> : <Navigate to="/" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
 
-  if (user.role === 'teacher') {
-    if (view === 'creator') {
-      return (
-        <QuizCreator 
-          user={user}
-          editingQuiz={editingQuiz}
-          onCancel={() => {
-            setView('dashboard');
-            setEditingQuiz(null);
-          }}
-          onSave={() => {
-            setView('dashboard');
-            setEditingQuiz(null);
-          }}
-        />
-      );
-    }
+function TeacherRoutes({ user, onLogout }: { user: AppUser, onLogout: () => void }) {
+  const navigate = useNavigate();
+  const [editingQuiz, setEditingQuiz] = useState<Quiz | null>(null);
 
-    return (
-      <TeacherDashboard 
-        user={user}
-        onLogout={handleLogout}
-        onStartQuizEditor={(quiz) => {
-          setEditingQuiz(quiz || null);
-          setView('creator');
-        }}
-      />
-    );
-  }
+  return (
+    <Routes>
+      <Route path="/" element={<TeacherDashboard user={user} onLogout={onLogout} onStartQuizEditor={(quiz) => { setEditingQuiz(quiz || null); navigate('creator'); }} />} />
+      <Route path="students" element={<TeacherDashboard user={user} onLogout={onLogout} activeTabInitial="students" onStartQuizEditor={(quiz) => { setEditingQuiz(quiz || null); navigate('creator'); }} />} />
+      <Route path="quiz/:quizId" element={<TeacherDashboard user={user} onLogout={onLogout} activeTabInitial="details" onStartQuizEditor={(quiz) => { setEditingQuiz(quiz || null); navigate('/teacher/creator'); }} />} />
+      <Route path="creator" element={<QuizCreator user={user} editingQuiz={editingQuiz} onCancel={() => { setEditingQuiz(null); navigate('/teacher'); }} onSave={() => { setEditingQuiz(null); navigate('/teacher'); }} />} />
+    </Routes>
+  );
+}
 
-  if (user.role === 'student') {
-    if (view === 'quiz' && activeQuiz) {
-      return (
-        <StudentQuizView 
-          quiz={activeQuiz}
-          user={user}
-          onExit={() => {
-            setView('dashboard');
-            setActiveQuiz(null);
-          }}
-          onComplete={() => {
-            setView('dashboard');
-            setActiveQuiz(null);
-          }}
-        />
-      );
-    }
+function StudentRoutes({ user, onLogout }: { user: AppUser, onLogout: () => void }) {
+  const navigate = useNavigate();
+  const [activeQuiz, setActiveQuiz] = useState<Quiz | null>(null);
 
-    return (
-      <StudentDashboard 
-        user={user}
-        onLogout={handleLogout}
-        onStartQuiz={async (quizId) => {
-          try {
-            const quizDoc = await getDoc(doc(db, 'quizzes', quizId));
-            if (quizDoc.exists()) {
-              setActiveQuiz(quizDoc.data() as Quiz);
-              setView('quiz');
-            }
-          } catch (err) {
-            console.error('Failed to fetch quiz details:', err);
-          }
-        }}
-      />
-    );
-  }
+  return (
+    <Routes>
+      <Route index element={<StudentDashboard user={user} onLogout={onLogout} onStartQuiz={async (quizId) => {
+        const quizDoc = await getDoc(doc(db, 'quizzes', quizId));
+        if (quizDoc.exists()) {
+          setActiveQuiz(quizDoc.data() as Quiz);
+          navigate(`quiz/${quizId}`);
+        }
+      }} />} />
+      <Route path="quiz/:quizId" element={activeQuiz ? <StudentQuizView quiz={activeQuiz} user={user} onExit={() => { setActiveQuiz(null); navigate('/student'); }} onComplete={() => { setActiveQuiz(null); navigate('/student'); }} /> : <Navigate to="/student" replace />} />
+    </Routes>
+  );
+}
 
-  return null;
+export default function App() {
+  return (
+    <BrowserRouter>
+      <TitleManager />
+      <MainApp />
+    </BrowserRouter>
+  );
 }

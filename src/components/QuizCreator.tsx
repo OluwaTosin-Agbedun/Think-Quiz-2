@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Save, ArrowLeft, FileText, Upload, Brain, Settings, Calendar, Eye, EyeOff, Clock } from 'lucide-react';
-import { Quiz, Question, GradeScale, User } from '../types';
+import { X, Plus, Trash2, Save, ArrowLeft, FileText, Upload, Brain, Settings, Calendar, Eye, EyeOff, Clock, Download, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Quiz, Question, GradeScale, User, QuestionType } from '../types';
 import { generateId, cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -18,6 +18,8 @@ export default function QuizCreator({ user, onSave, onCancel, editingQuiz }: Qui
   const [description, setDescription] = useState(editingQuiz?.description || '');
   const [timeLimit, setTimeLimit] = useState(editingQuiz?.timeLimitPerQuestion || 30);
   const [isParsing, setIsParsing] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importText, setImportText] = useState('');
   const [gradeScale, setGradeScale] = useState<GradeScale>(editingQuiz?.gradeScale || { pass: 50, excellent: 80 });
   const [scoreReveal, setScoreReveal] = useState<'immediate' | 'manual'>(editingQuiz?.scoreReveal || 'immediate');
   const [startTime, setStartTime] = useState<string>(editingQuiz?.startTime ? new Date(editingQuiz.startTime).toISOString().slice(0, 16) : '');
@@ -51,6 +53,55 @@ export default function QuizCreator({ user, onSave, onCancel, editingQuiz }: Qui
       setQuestions(prev => [...prev.filter(q => q.text !== ''), ...mockAISuggestions]);
       setIsParsing(false);
     }, 2000);
+  };
+
+  const handleImport = () => {
+    try {
+      const sections = importText.split('---').map(s => s.trim()).filter(s => s);
+      const parsedQuestions: Question[] = sections.map(section => {
+        const lines = section.split('\n');
+        let text = '';
+        let type: QuestionType = 'single';
+        const options: string[] = [];
+        let correctAnswer: any = 0;
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('Q:')) text = trimmed.replace('Q:', '').trim();
+          if (trimmed.startsWith('T:')) type = trimmed.replace('T:', '').trim() as QuestionType;
+          if (trimmed.startsWith('A:')) options[0] = trimmed.replace('A:', '').trim();
+          if (trimmed.startsWith('B:')) options[1] = trimmed.replace('B:', '').trim();
+          if (trimmed.startsWith('C:')) options[2] = trimmed.replace('C:', '').trim();
+          if (trimmed.startsWith('D:')) options[3] = trimmed.replace('D:', '').trim();
+          if (trimmed.startsWith('K:')) {
+            const val = trimmed.replace('K:', '').trim();
+            if (type === 'multiple') {
+              correctAnswer = val.split(',').map(v => parseInt(v.trim()));
+            } else if (type === 'single') {
+              correctAnswer = parseInt(val);
+            } else {
+              correctAnswer = val;
+            }
+          }
+        }
+
+        return {
+          id: generateId(),
+          type,
+          text,
+          options: type === 'text' ? [] : options,
+          correctAnswer
+        };
+      });
+
+      if (parsedQuestions.length === 0) throw new Error('No valid questions identified in block.');
+      
+      setQuestions([...questions.filter(q => q.text !== ''), ...parsedQuestions]);
+      setShowImportModal(false);
+      setImportText('');
+    } catch (err: any) {
+      alert('Import Failed: ' + err.message);
+    }
   };
 
   const handleSave = async () => {
@@ -92,6 +143,89 @@ export default function QuizCreator({ user, onSave, onCancel, editingQuiz }: Qui
 
   return (
     <div className="min-h-screen bg-slate-50 py-16 px-10 font-sans">
+      <AnimatePresence>
+        {showImportModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              className="bg-white w-full max-w-2xl rounded-[3.5rem] shadow-2xl overflow-hidden flex flex-col"
+            >
+              <div className="p-12 pb-6 flex justify-between items-start">
+                <div>
+                  <h3 className="text-3xl font-black text-slate-900 tracking-tighter mb-2">Protocol Importer</h3>
+                  <p className="text-slate-400 font-bold italic">Paste your structured assessment block below.</p>
+                </div>
+                <button onClick={() => setShowImportModal(false)} className="p-3 hover:bg-slate-50 rounded-2xl transition-all">
+                  <X className="w-6 h-6 text-slate-300" />
+                </button>
+              </div>
+
+              <div className="px-12 py-6 bg-slate-50 border-y border-slate-100 flex items-center gap-4">
+                 <div className="p-3 bg-indigo-100/50 rounded-xl">
+                   <Download className="w-5 h-5 text-indigo-600" />
+                 </div>
+                 <div className="text-[10px]">
+                   <p className="font-black text-indigo-600 uppercase tracking-widest mb-1">Acceptable Format (ThinkQuiz Protocol)</p>
+                   <code className="text-slate-500 font-mono">Q: Text \n T: single|multiple|text \n A: Opt1 \n B: Opt2 \n K: 0 \n ---</code>
+                 </div>
+              </div>
+
+              <div className="p-12 flex-1">
+                <textarea 
+                  value={importText}
+                  onChange={e => setImportText(e.target.value)}
+                  placeholder="Q: What is 2+2?&#10;T: single&#10;A: 3&#10;B: 4&#10;K: 1&#10;---"
+                  className="w-full h-64 bg-slate-50 p-8 rounded-3xl border border-slate-100 focus:bg-white outline-none font-mono text-sm transition-all resize-none"
+                />
+              </div>
+
+              <div className="p-12 pt-0 flex gap-4">
+                <button 
+                  onClick={handleImport}
+                  className="flex-1 bg-indigo-600 text-white font-black py-5 rounded-2xl hover:bg-indigo-700 transition-all uppercase tracking-widest text-sm shadow-xl shadow-indigo-600/20"
+                >
+                  Confirm Integration
+                </button>
+                <button 
+                  onClick={() => setImportText(`Q: What is the primary objective of academic integrity?
+T: single
+A: Punishment
+B: Quality Assurance
+C: Automation
+D: Revenue
+K: 1
+---
+Q: Which tools are forbidden during a secure session? (Select all)
+T: multiple
+A: Calculator (Physical)
+B: Brain
+C: Search Engines
+D: Peer Consultation
+K: 0, 2, 3
+---`)}
+                  className="px-8 bg-amber-50 text-amber-600 border border-amber-100 font-black rounded-2xl hover:bg-amber-100 transition-all uppercase tracking-widest text-sm"
+                >
+                  Load Sample
+                </button>
+                <button 
+                  onClick={() => setShowImportModal(false)}
+                  className="px-10 bg-slate-50 text-slate-400 font-black rounded-2xl hover:bg-slate-100 transition-all uppercase tracking-widest text-sm"
+                >
+                  Abort
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="max-w-6xl mx-auto">
         <header className="flex justify-between items-center mb-16">
           <div className="flex items-center gap-6">
@@ -125,18 +259,27 @@ export default function QuizCreator({ user, onSave, onCancel, editingQuiz }: Qui
                        Supply a source document for integrity protocols. Our neural model will extrapolate questions aligned with institutional standards.
                      </p>
                      
-                     <button 
-                      onClick={simulatePDFParsing}
-                      disabled={isParsing}
-                      className="bg-white text-indigo-600 px-8 py-4 rounded-2xl transition-all flex items-center gap-4 font-black uppercase text-xs tracking-widest disabled:opacity-50 shadow-lg"
-                     >
-                       {isParsing ? (
-                         <span className="animate-spin w-5 h-5 border-4 border-indigo-400 border-t-transparent rounded-full" />
-                       ) : (
-                         <Upload className="w-5 h-5" />
-                       )}
-                       {isParsing ? 'Processing Knowledge Graph...' : 'Synthesize from PDF'}
-                     </button>
+                      <div className="flex gap-4">
+                        <button 
+                          onClick={simulatePDFParsing}
+                          disabled={isParsing}
+                          className="bg-white text-indigo-600 px-8 py-4 rounded-2xl transition-all flex items-center gap-4 font-black uppercase text-xs tracking-widest disabled:opacity-50 shadow-lg"
+                        >
+                          {isParsing ? (
+                            <span className="animate-spin w-5 h-5 border-4 border-indigo-400 border-t-transparent rounded-full" />
+                          ) : (
+                            <Brain className="w-5 h-5" />
+                          )}
+                          {isParsing ? 'Processing Knowledge Graph...' : 'Synthesize from PDF'}
+                        </button>
+                        <button 
+                          onClick={() => setShowImportModal(true)}
+                          className="bg-indigo-500 text-white px-8 py-4 rounded-2xl transition-all flex items-center gap-4 font-black uppercase text-xs tracking-widest shadow-lg hover:bg-indigo-400"
+                        >
+                          <Upload className="w-5 h-5" />
+                          Protocol Import
+                        </button>
+                      </div>
                   </div>
                </div>
                <div className="absolute right-[-5%] top-[-10%] opacity-5 group-hover:opacity-10 transition-opacity">

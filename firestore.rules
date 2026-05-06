@@ -52,6 +52,23 @@ service cloud.firestore {
       return resource.data;
     }
 
+    function isValidResult(data) {
+      return data.keys().hasAll(['id', 'quizId', 'studentId', 'studentName', 'teacherId', 'score', 'grade', 'totalQuestions', 'violations', 'questions', 'timeTaken', 'completedAt', 'answers']) &&
+             data.id is string &&
+             data.quizId is string &&
+             data.studentId is string &&
+             data.studentName is string &&
+             data.teacherId is string &&
+             data.score is number &&
+             data.grade is string &&
+             data.totalQuestions is number &&
+             data.violations is list &&
+             data.questions is list &&
+             data.answers is list &&
+             data.timeTaken is number &&
+             data.completedAt is number;
+    }
+
     // Default deny
     match /{document=**} {
       allow read, write: if false;
@@ -103,8 +120,11 @@ service cloud.firestore {
         resource.data.studentId == request.auth.uid ||
         resource.data.teacherId == request.auth.uid
       );
-      allow create: if isSignedIn() && incoming().studentId == request.auth.uid;
-      allow update: if isAdmin() || (isTeacher() && existing().teacherId == request.auth.uid);
+      allow create: if isSignedIn() && 
+                     incoming().studentId == request.auth.uid && 
+                     isValidResult(incoming());
+      allow update: if (isAdmin() || (isTeacher() && existing().teacherId == request.auth.uid)) && 
+                     isValidResult(incoming());
       allow delete: if isAdmin();
       
       // Violations
